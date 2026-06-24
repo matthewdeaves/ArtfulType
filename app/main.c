@@ -57,6 +57,11 @@
 #define iSplashOpen   2
 #define iSplashTitle  3
 
+#define kLinkDialog  132
+#define iLinkOK      1
+#define iLinkCancel  2
+#define iLinkField   4
+
 #define mView        130
 #define iMarkdownView 1
 #define iWriterView  2
@@ -91,6 +96,28 @@ static short gVRefNum;
 static MenuHandle gViewMenu;
 static Boolean gHideMarkdown = true;
 static short gZoomIndex = kZoomBaselineIndex;
+
+/*
+    Link URLs in Writer mode live here, keyed by a small ID (1-based;
+    0 means "no link"). The ID rides along in each run's otherwise-unused
+    tsColor.red -- TextEdit already tracks style-run boundaries through
+    every insert/delete, so the ID (and therefore the URL) follows the
+    linked text automatically with no manual range bookkeeping. Reset
+    (gLinkCount = 0) at the start of every BuildHiddenView, since that's
+    a full reparse of gTE and re-derives whichever links currently exist.
+*/
+#define MAX_LINKS 64
+static Str255 gLinkURLs[MAX_LINKS + 1];
+static short gLinkCount = 0;
+
+static short AddLinkURL(const unsigned char *url)
+{
+    if (gLinkCount >= MAX_LINKS)
+        return 0;
+    gLinkCount++;
+    BlockMove((Ptr) url, (Ptr) gLinkURLs[gLinkCount], url[0] + 1);
+    return gLinkCount;
+}
 
 static short CurrentFontSize(void)
 {
@@ -428,6 +455,7 @@ static void ClearStyles(void)
 
 typedef struct {
     short start, end, kind, level;
+    short linkID;
 } StyleOp;
 
 /*
@@ -473,6 +501,7 @@ static void BuildHiddenView(void)
     Rect savedViewRect;
 
     opCount = 0;
+    gLinkCount = 0;
     srcH = (**gTE).hText;
     len = (**gTE).teLength;
     outH = NewHandle(len + 1);
@@ -581,13 +610,19 @@ static void BuildHiddenView(void)
                     closeParen++;
                 if (closeParen < len) {
                     long outStart = outLen, m;
+                    Str255 url;
+                    long urlLen = closeParen - (closeBracket + 2);
 
                     for (m = i + 1; m < closeBracket; m++)
                         (*outH)[outLen++] = (*srcH)[m];
+                    if (urlLen > 255) urlLen = 255;
+                    url[0] = (unsigned char) urlLen;
+                    BlockMove(*srcH + closeBracket + 2, url + 1, urlLen);
                     if (opCount < MAX_STYLE_OPS) {
                         ops[opCount].start = (short) outStart;
                         ops[opCount].end = (short) outLen;
                         ops[opCount].kind = 'L';
+                        ops[opCount].linkID = AddLinkURL(url);
                         opCount++;
                     }
                     i = closeParen + 1;
@@ -637,7 +672,10 @@ static void BuildHiddenView(void)
                 break;
             case 'L':
                 opStyle.tsFace = underline;
-                TESetStyle(doFace, &opStyle, true, gHiddenTE);
+                opStyle.tsColor.red = ops[k].linkID;
+                opStyle.tsColor.green = 0;
+                opStyle.tsColor.blue = 0;
+                TESetStyle(doFace + doColor, &opStyle, true, gHiddenTE);
                 break;
             case 'H':
                 opStyle.tsFace = bold;
@@ -657,9 +695,8 @@ static void BuildHiddenView(void)
     markdown delimiters, rebuilding gTE's canonical text from scratch.
     Headings are detected per-line (bold + a heading-sized run at the
     line's start); everything else is inline bold/italic/Monaco-as-code.
-    Link underlines round-trip as "[text]()" -- the URL itself isn't
-    recoverable from styling alone, so it comes back empty; fill it in
-    after switching to Markdown view.
+    Link underlines round-trip as "[text](url)" -- the url comes from
+    gLinkURLs, keyed by the run's tsColor.red (see AddLinkURL above).
 */
 static void SyncHiddenToCanonical(void)
 {
@@ -671,10 +708,15 @@ static void SyncHiddenToCanonical(void)
     long lineStart;
     short monacoFont;
     Rect savedViewRect;
+    long urlSpace;
+    short li;
 
     srcH = (**gHiddenTE).hText;
     len = (**gHiddenTE).teLength;
-    outCap = len * 2 + 64;
+    urlSpace = 0;
+    for (li = 1; li <= gLinkCount; li++)
+        urlSpace += gLinkURLs[li][0];
+    outCap = len * 2 + 64 + urlSpace;
     outH = NewHandle(outCap);
     outLen = 0;
 
@@ -720,10 +762,12 @@ static void SyncHiddenToCanonical(void)
             outLen += (lineEnd - lineStart);
         } else {
             long i = lineStart;
-            Boolean inBold = false, inItalic = false, inCode = false;
+            Boolean inBold = false, inItalic = false, inCode = false, inLink = false;
+            Str255 curLinkURL;
 
             while (i <= lineEnd) {
-                Boolean wantBold = false, wantItalic = false, wantCode = false;
+                Boolean wantBold = false, wantItalic = false, wantCode = false, wantLink = false;
+                short linkID = 0;
 
                 if (i < lineEnd) {
                     TextStyle st;
@@ -733,8 +777,12 @@ static void SyncHiddenToCanonical(void)
                     wantBold = (st.tsFace & bold) != 0;
                     wantItalic = (st.tsFace & italic) != 0;
                     wantCode = (st.tsFont == monacoFont);
+                    wantLink = (st.tsFace & underline) != 0;
+                    linkID = st.tsColor.red;
                 }
 
+                /* Close innermost-first: code, italic, bold, then link
+                   (link is the outermost wrapper, [bold link](url)). */
                 if (inCode && !wantCode) { (*outH)[outLen++] = '`'; inCode = false; }
                 if (inItalic && !wantItalic) { (*outH)[outLen++] = '*'; inItalic = false; }
                 if (inBold && !wantBold) {
@@ -742,7 +790,23 @@ static void SyncHiddenToCanonical(void)
                     (*outH)[outLen++] = '*';
                     inBold = false;
                 }
+                if (inLink && !wantLink) {
+                    (*outH)[outLen++] = ']';
+                    (*outH)[outLen++] = '(';
+                    BlockMove(curLinkURL + 1, *outH + outLen, curLinkURL[0]);
+                    outLen += curLinkURL[0];
+                    (*outH)[outLen++] = ')';
+                    inLink = false;
+                }
 
+                if (!inLink && wantLink) {
+                    (*outH)[outLen++] = '[';
+                    inLink = true;
+                    if (linkID >= 1 && linkID <= gLinkCount)
+                        BlockMove(gLinkURLs[linkID], curLinkURL, gLinkURLs[linkID][0] + 1);
+                    else
+                        curLinkURL[0] = 0;
+                }
                 if (!inBold && wantBold) {
                     (*outH)[outLen++] = '*';
                     (*outH)[outLen++] = '*';
@@ -1234,6 +1298,60 @@ static void ToggleFace(Style face)
     TESetStyle(doFace, &ts, true, gHiddenTE);
 }
 
+/* Prompts for a URL; returns true and fills in `url` if OK was clicked. */
+static Boolean ShowLinkURLDialog(unsigned char *url)
+{
+    DialogPtr dlg;
+    short item;
+    DialogItemType type;
+    Handle itemH;
+    Rect box;
+    Boolean result;
+
+    dlg = GetNewDialog(kLinkDialog, NULL, (WindowPtr) -1L);
+    if (dlg == NULL)
+        return false;
+
+    SelectDialogItemText(dlg, iLinkField, 0, 32767);
+
+    do {
+        ModalDialog(NULL, &item);
+    } while (item != iLinkOK && item != iLinkCancel);
+
+    result = (item == iLinkOK);
+    if (result) {
+        GetDialogItem(dlg, iLinkField, &type, &itemH, &box);
+        GetDialogItemText(itemH, url);
+    }
+
+    DisposeDialog(dlg);
+    SetPort(gWindow);
+    UpdateMenuBarLook();
+    return result;
+}
+
+/*
+    "Link" in Writer mode: prompts for a URL, then applies underline +
+    a link ID (see AddLinkURL) to the current selection.
+*/
+static void DoLinkHidden(void)
+{
+    Str255 url;
+
+    if ((**gHiddenTE).selStart == (**gHiddenTE).selEnd)
+        return;
+
+    if (ShowLinkURLDialog(url)) {
+        TextStyle ts;
+
+        ts.tsFace = underline;
+        ts.tsColor.red = AddLinkURL(url);
+        ts.tsColor.green = 0;
+        ts.tsColor.blue = 0;
+        TESetStyle(doFace + doColor, &ts, true, gHiddenTE);
+    }
+}
+
 static void ToggleCode(void)
 {
     TextStyle ts;
@@ -1308,10 +1426,9 @@ static void SetTypingStyleNormal(short pos)
     Live "type the markdown, get the formatting" for Writer mode: called
     after every keystroke. Looks backward from the caret for a delimiter
     pair that the just-typed character completed, and if found, strips
-    both delimiters and applies the corresponding style in place. Only
-    bold/italic/code/headings are detected this way -- links need a URL
-    that has nowhere to live once the brackets are gone, and strikethrough
-    has no native classic Mac text style, so both stay menu-only.
+    both delimiters and applies the corresponding style in place.
+    Strikethrough has no native classic Mac text style, so it stays
+    menu-only; everything else, including links, converts live.
 */
 static void DetectInlineMarkdown(char justTyped)
 {
@@ -1428,6 +1545,53 @@ static void DetectInlineMarkdown(char justTyped)
             }
             p--;
         }
+    } else if (justTyped == ')') {
+        long closeParenPos = caret - 1;
+        long p = closeParenPos - 1;
+
+        while (p >= lineStart && (*textH)[p] != '(')
+            p--;
+
+        if (p >= lineStart && p > lineStart && (*textH)[p - 1] == ']') {
+            long openParenPos = p;
+            long closeBracketPos = openParenPos - 1;
+            long urlStart = openParenPos + 1;
+            long urlLen = closeParenPos - urlStart;
+            long q = closeBracketPos - 1;
+
+            while (q >= lineStart && (*textH)[q] != '[')
+                q--;
+
+            if (q >= lineStart) {
+                long openBracketPos = q;
+                Str255 url;
+                short linkID;
+                TextStyle ts;
+
+                if (urlLen < 0) urlLen = 0;
+                if (urlLen > 255) urlLen = 255;
+                url[0] = (unsigned char) urlLen;
+                BlockMove(*textH + urlStart, url + 1, urlLen);
+
+                HUnlock(textH);
+
+                TESetSelect((short) closeBracketPos, (short) caret, gHiddenTE);
+                TEDelete(gHiddenTE);
+                TESetSelect((short) openBracketPos, (short) (openBracketPos + 1), gHiddenTE);
+                TEDelete(gHiddenTE);
+
+                linkID = AddLinkURL(url);
+
+                ts.tsFace = underline;
+                ts.tsColor.red = linkID;
+                ts.tsColor.green = 0;
+                ts.tsColor.blue = 0;
+                TESetSelect((short) openBracketPos, (short) (closeBracketPos - 1), gHiddenTE);
+                TESetStyle(doFace + doColor, &ts, true, gHiddenTE);
+                SetTypingStyleNormal((short) (closeBracketPos - 1));
+                return;
+            }
+        }
     }
 
     HUnlock(textH);
@@ -1446,7 +1610,8 @@ static void ClearSelectionStyleHidden(void)
     ts.tsFont = fontNum;
     ts.tsFace = normal;
     ts.tsSize = CurrentFontSize();
-    TESetStyle(doFont + doFace + doSize, &ts, true, gHiddenTE);
+    ts.tsColor.red = ts.tsColor.green = ts.tsColor.blue = 0;
+    TESetStyle(doFont + doFace + doSize + doColor, &ts, true, gHiddenTE);
 }
 
 /*
@@ -1603,7 +1768,7 @@ static void DoMenuCommand(long menuResult)
                 case iH1:     ToggleHeadingHidden(1); break;
                 case iH2:     ToggleHeadingHidden(2); break;
                 case iH3:     ToggleHeadingHidden(3); break;
-                case iLink:   ToggleFace(underline); break;
+                case iLink:   DoLinkHidden(); break;
                 case iNone:   ClearSelectionStyleHidden(); break;
             }
         } else {
@@ -1631,6 +1796,10 @@ static void DoMenuCommand(long menuResult)
         }
     }
     HiliteMenu(0);
+    /* HiliteMenu un-hilites the clicked title assuming the Menu Manager's
+       own standard white-bar/black-text look, which clobbers our inverted
+       Writer-mode bar -- reassert it now that the menu has closed. */
+    UpdateMenuBarLook();
 }
 
 static void EventLoop(void)

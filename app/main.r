@@ -45,6 +45,26 @@ resource 'DLOG' (131) {
     noAutoCenter
 };
 
+resource 'DITL' (132) {
+    {
+        {75, 165, 97, 245}, Button { enabled, "OK" },
+        {75, 75, 97, 155}, Button { enabled, "Cancel" },
+        {15, 20, 33, 300}, StaticText { disabled, "Link URL:" },
+        {38, 20, 58, 300}, EditText { enabled, "" }
+    }
+};
+
+resource 'DLOG' (132) {
+    {126, 96, 236, 416},
+    dBoxProc,
+    visible,
+    noGoAway,
+    0,
+    132,
+    "",
+    noAutoCenter
+};
+
 resource 'FREF' (128) {
     'APPL', 0, ""
 };
