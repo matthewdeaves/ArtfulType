@@ -1697,6 +1697,14 @@ static void EventLoop(void)
     }
 }
 
+#define kSplashImageWidth 128
+#define kSplashImageHeight 100
+#define kSplashImageRowBytes (kSplashImageWidth / 8)
+
+static const unsigned char kSplashImageBits[kSplashImageHeight * kSplashImageRowBytes] = {
+#include "splash_image.h"
+};
+
 static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
 {
     DialogItemType type;
@@ -1704,6 +1712,8 @@ static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
     Rect box;
     short textWidth;
     Str255 s;
+    BitMap image;
+    Rect imageRect;
 
     GetDialogItem(dlg, itemNo, &type, &itemH, &box);
     SetPort(dlg);
@@ -1711,15 +1721,30 @@ static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
     TextFont(0);
     TextSize(0);
     TextFace(bold);
-    BlockMove("\pArtfulType", s, 11);
+    BlockMove("\pThe Artful Type", s, 16);
     textWidth = StringWidth(s);
-    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 16);
+    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 18);
     DrawString(s);
 
+    image.baseAddr = (Ptr)kSplashImageBits;
+    image.rowBytes = kSplashImageRowBytes;
+    SetRect(&image.bounds, 0, 0, kSplashImageWidth, kSplashImageHeight);
+    SetRect(&imageRect, 0, 0, kSplashImageWidth, kSplashImageHeight);
+    OffsetRect(&imageRect,
+        box.left + (box.right - box.left - kSplashImageWidth) / 2,
+        box.top + 28);
+    CopyBits(&image, &((GrafPtr)dlg)->portBits, &image.bounds, &imageRect, srcCopy, NULL);
+
     TextFace(normal);
+    TextSize(9);
+    BlockMove("\pA Distraction-Free Writing Environment", s, 39);
+    textWidth = StringWidth(s);
+    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 144);
+    DrawString(s);
+
     BlockMove("\pby Action Retro", s, 16);
     textWidth = StringWidth(s);
-    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 36);
+    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 160);
     DrawString(s);
 }
 
