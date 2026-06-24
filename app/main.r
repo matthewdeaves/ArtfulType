@@ -28,14 +28,14 @@ data 'ZLvl' (128) {
 
 resource 'DITL' (131) {
     {
-        {115, 20, 137, 140}, Button { enabled, "New Document" },
-        {115, 150, 137, 270}, Button { enabled, "Open Document" },
-        {20, 20, 72, 280}, UserItem { disabled }
+        {206, 60, 228, 180}, Button { enabled, "New Document" },
+        {206, 200, 228, 320}, Button { enabled, "Open Document" },
+        {12, 15, 196, 365}, UserItem { disabled }
     }
 };
 
 resource 'DLOG' (131) {
-    {101, 106, 261, 406},
+    {61, 66, 301, 446},
     dBoxProc,
     visible,
     noGoAway,
