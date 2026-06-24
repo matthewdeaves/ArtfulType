@@ -1,0 +1,8 @@
+vmac/*.app/
+vmac/*.ROM
+*.dsk
+*.img
+*.iso
+build/
+.DS_Store
+.claude/
