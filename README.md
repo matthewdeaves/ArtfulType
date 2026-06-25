@@ -15,7 +15,7 @@ Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compi
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPLv3 — see [LICENSE](LICENSE).
 
 ## AI Disclaimer
 
