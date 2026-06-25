@@ -36,6 +36,13 @@
 #define iSaveAs  4
 #define iQuit    6
 
+#define mEdit    131
+#define iUndo    1
+#define iRedo    2
+#define iCut     4
+#define iCopy    5
+#define iPaste   6
+
 #define mStyle   129
 #define iBold    1
 #define iItalic  2
@@ -94,8 +101,41 @@ static Boolean gDirty = false;
 static Str255 gFileName;
 static short gVRefNum;
 static MenuHandle gViewMenu;
+static MenuHandle gEditMenu;
 static Boolean gHideMarkdown = true;
 static short gZoomIndex = kZoomBaselineIndex;
+
+/*
+    Undo/redo snapshots store the *canonical markdown text* regardless
+    of which mode is active, not gActiveTE's raw buffer -- gHiddenTE's
+    styling (bold/heading/link runs) has no simple "get it all, restore
+    it all" API in classic styled TextEdit, but canonical markdown text
+    already round-trips styling correctly through the existing
+    BuildHiddenView/SyncHiddenToCanonical machinery. So: push a
+    snapshot by syncing to canonical first (if in Writer mode) and
+    copying gTE's text; restore one by replacing gTE's text and, if in
+    Writer mode, rebuilding gHiddenTE from it. Both syncing and
+    rebuilding are full-document operations, but they only happen at
+    undo/redo-relevant moments (pushes are coalesced per typing run,
+    not per keystroke), never per character.
+
+    Undo history is intentionally cleared on every view-mode switch
+    and on new/open -- simpler and more predictable than trying to
+    make snapshots meaningful across two independently-edited buffers.
+*/
+#define MAX_UNDO_LEVELS 15
+
+typedef struct {
+    Handle textH;
+    long length;
+    short selStart, selEnd;
+} UndoSnapshot;
+
+static UndoSnapshot gUndoStack[MAX_UNDO_LEVELS];
+static short gUndoCount = 0;
+static UndoSnapshot gRedoStack[MAX_UNDO_LEVELS];
+static short gRedoCount = 0;
+static Boolean gTypingRunActive = false;
 
 /*
     Link URLs in Writer mode live here, keyed by a small ID (1-based;
@@ -200,6 +240,16 @@ static void MakeMenu(void)
     fileMenu = NewMenu(mFile, "\pFile");
     AppendMenu(fileMenu, "\pNew/N;Open.../O;Save/S;Save As...;(-;Quit/Q");
     InsertMenu(fileMenu, 0);
+
+    /* No "/" shortcut on Redo -- it would register as a second cmd-key
+       equivalent for the same letter as Undo, ambiguous to MenuKey.
+       Cmd-Shift-Z for Redo is instead handled directly in EventLoop,
+       intercepted before MenuKey ever sees it. */
+    gEditMenu = NewMenu(mEdit, "\pEdit");
+    AppendMenu(gEditMenu, "\pUndo/Z;Redo;(-;Cut/X;Copy/C;Paste/V");
+    InsertMenu(gEditMenu, 0);
+    DisableItem(gEditMenu, iUndo);
+    DisableItem(gEditMenu, iRedo);
 
     styleMenu = NewMenu(mStyle, "\pStyle");
     AppendMenu(styleMenu, "\pBold/B;Italic/I;Code/K;Strikethrough;(-;Heading 1/1;Heading 2/2;Heading 3/3;(-;Link/L;(-;None");
@@ -841,6 +891,268 @@ static void SyncHiddenToCanonical(void)
     RestoreDrawing(gTE, &savedViewRect);
 }
 
+static void FreeSnapshot(UndoSnapshot *snap)
+{
+    if (snap->textH != NULL)
+        DisposeHandle(snap->textH);
+    snap->textH = NULL;
+}
+
+static void ClearUndoRedoStacks(void)
+{
+    short i;
+
+    for (i = 0; i < gUndoCount; i++)
+        FreeSnapshot(&gUndoStack[i]);
+    gUndoCount = 0;
+    for (i = 0; i < gRedoCount; i++)
+        FreeSnapshot(&gRedoStack[i]);
+    gRedoCount = 0;
+    gTypingRunActive = false;
+}
+
+static void UpdateEditMenuState(void)
+{
+    EnableItem(gEditMenu, iUndo);
+    EnableItem(gEditMenu, iRedo);
+    if (gUndoCount == 0)
+        DisableItem(gEditMenu, iUndo);
+    if (gRedoCount == 0)
+        DisableItem(gEditMenu, iRedo);
+}
+
+/*
+    Captures the current document (always as canonical markdown text,
+    syncing first if Writer mode is active) onto the undo stack, and
+    clears the redo stack -- any new edit invalidates whatever could
+    have been redone. Bounded: pushing past MAX_UNDO_LEVELS evicts the
+    oldest entry rather than growing unboundedly.
+*/
+static void PushUndoSnapshot(void)
+{
+    UndoSnapshot *slot;
+    Handle textH;
+    long len;
+    short i;
+
+    if (gHideMarkdown)
+        SyncHiddenToCanonical();
+
+    len = (**gTE).teLength;
+    textH = NewHandle(len);
+    HLock(textH);
+    HLock((**gTE).hText);
+    BlockMove(*(**gTE).hText, *textH, len);
+    HUnlock((**gTE).hText);
+    HUnlock(textH);
+
+    if (gUndoCount == MAX_UNDO_LEVELS) {
+        FreeSnapshot(&gUndoStack[0]);
+        for (i = 0; i < MAX_UNDO_LEVELS - 1; i++)
+            gUndoStack[i] = gUndoStack[i + 1];
+        gUndoCount--;
+    }
+
+    slot = &gUndoStack[gUndoCount++];
+    slot->textH = textH;
+    slot->length = len;
+    slot->selStart = (**gActiveTE).selStart;
+    slot->selEnd = (**gActiveTE).selEnd;
+
+    for (i = 0; i < gRedoCount; i++)
+        FreeSnapshot(&gRedoStack[i]);
+    gRedoCount = 0;
+
+    UpdateEditMenuState();
+}
+
+/* Same idea as PushUndoSnapshot, but onto the redo stack -- called
+   right before undoing, so redoing can bring the undone state back. */
+static void PushRedoSnapshot(void)
+{
+    UndoSnapshot *slot;
+    Handle textH;
+    long len;
+    short i;
+
+    if (gHideMarkdown)
+        SyncHiddenToCanonical();
+
+    len = (**gTE).teLength;
+    textH = NewHandle(len);
+    HLock(textH);
+    HLock((**gTE).hText);
+    BlockMove(*(**gTE).hText, *textH, len);
+    HUnlock((**gTE).hText);
+    HUnlock(textH);
+
+    if (gRedoCount == MAX_UNDO_LEVELS) {
+        FreeSnapshot(&gRedoStack[0]);
+        for (i = 0; i < MAX_UNDO_LEVELS - 1; i++)
+            gRedoStack[i] = gRedoStack[i + 1];
+        gRedoCount--;
+    }
+
+    slot = &gRedoStack[gRedoCount++];
+    slot->textH = textH;
+    slot->length = len;
+    slot->selStart = (**gActiveTE).selStart;
+    slot->selEnd = (**gActiveTE).selEnd;
+}
+
+/* Replaces gTE's text with a snapshot and, if Writer mode is active,
+   rebuilds gHiddenTE from it so styling comes back correctly. Doesn't
+   free the snapshot -- the caller (DoUndo/DoRedo) owns that. */
+static void RestoreSnapshot(UndoSnapshot *snap)
+{
+    Rect savedViewRect;
+
+    SuppressDrawing(gTE, &savedViewRect);
+    TESetSelect(0, 32767, gTE);
+    TEDelete(gTE);
+    HLock(snap->textH);
+    TEInsert(*snap->textH, snap->length, gTE);
+    HUnlock(snap->textH);
+    RestoreDrawing(gTE, &savedViewRect);
+
+    if (gHideMarkdown) {
+        BuildHiddenView();
+        TESetSelect(snap->selStart, snap->selEnd, gHiddenTE);
+    } else {
+        ClearStyles();
+        TESetSelect(snap->selStart, snap->selEnd, gTE);
+    }
+
+    gDirty = true;
+    gTypingRunActive = false;
+    AdjustScrollbar();
+    InvalRect(&gWindow->portRect);
+}
+
+static void DoUndo(void)
+{
+    UndoSnapshot snap;
+
+    if (gUndoCount == 0)
+        return;
+
+    PushRedoSnapshot();
+
+    gUndoCount--;
+    snap = gUndoStack[gUndoCount];
+    RestoreSnapshot(&snap);
+    FreeSnapshot(&snap);
+
+    UpdateEditMenuState();
+}
+
+static void DoRedo(void)
+{
+    UndoSnapshot snap;
+
+    if (gRedoCount == 0)
+        return;
+
+    /* Take the redo entry before pushing onto undo -- PushUndoSnapshot
+       unconditionally clears the redo stack (correct for a genuine new
+       edit, but redoing isn't one; grab what's needed first). */
+    gRedoCount--;
+    snap = gRedoStack[gRedoCount];
+
+    PushUndoSnapshot();
+
+    RestoreSnapshot(&snap);
+    FreeSnapshot(&snap);
+
+    UpdateEditMenuState();
+}
+
+/*
+    Cut/Copy/Paste go through the Scrap Manager directly (ZeroScrap/
+    PutScrap/GetScrap) rather than the usual TECut/TECopy/TEPaste +
+    TEToScrap/TEFromScrap pattern -- TEToScrap/TEFromScrap are declared
+    in this toolchain's headers but have no actual implementation
+    linked anywhere (confirmed: linker error, not a typo), so they're
+    unusable here. This means plain text round-trips through the
+    system clipboard correctly (including to/from other apps), but
+    styling (bold/italic/heading/link) doesn't survive a copy in
+    Writer mode -- pasted text always comes in unstyled. Acceptable
+    trade-off given the alternative (hand-rolling a 'styl' scrap
+    blob) for a toolchain limitation, not a design choice.
+*/
+static void DoCut(void)
+{
+    short selStart, selEnd;
+    long selLen;
+    Handle textH;
+
+    selStart = (**gActiveTE).selStart;
+    selEnd = (**gActiveTE).selEnd;
+    if (selStart == selEnd)
+        return;
+
+    selLen = selEnd - selStart;
+    textH = (**gActiveTE).hText;
+
+    PushUndoSnapshot();
+
+    ZeroScrap();
+    HLock(textH);
+    PutScrap(selLen, 'TEXT', *textH + selStart);
+    HUnlock(textH);
+
+    TEDelete(gActiveTE);
+
+    gDirty = true;
+    gTypingRunActive = false;
+    AdjustScrollbar();
+}
+
+static void DoCopy(void)
+{
+    short selStart, selEnd;
+    long selLen;
+    Handle textH;
+
+    selStart = (**gActiveTE).selStart;
+    selEnd = (**gActiveTE).selEnd;
+    if (selStart == selEnd)
+        return;
+
+    selLen = selEnd - selStart;
+    textH = (**gActiveTE).hText;
+
+    ZeroScrap();
+    HLock(textH);
+    PutScrap(selLen, 'TEXT', *textH + selStart);
+    HUnlock(textH);
+}
+
+static void DoPaste(void)
+{
+    Handle scrapH;
+    long offset;
+    long len;
+
+    scrapH = NewHandle(0);
+    len = GetScrap(scrapH, 'TEXT', &offset);
+    if (len <= 0) {
+        DisposeHandle(scrapH);
+        return;
+    }
+
+    PushUndoSnapshot();
+
+    HLock(scrapH);
+    TEInsert(*scrapH, len, gActiveTE);
+    HUnlock(scrapH);
+    DisposeHandle(scrapH);
+
+    gDirty = true;
+    gTypingRunActive = false;
+    AdjustScrollbar();
+}
+
 /*
     Remaps any run whose size matches one of the OLD base/heading sizes
     to the corresponding NEW size, in place -- used for zoom, so it
@@ -933,6 +1245,8 @@ static void SetViewMode(Boolean hideMarkdown)
     if (hideMarkdown == gHideMarkdown)
         return;
 
+    ClearUndoRedoStacks();
+    UpdateEditMenuState();
     TEDeactivate(gActiveTE);
 
     if (hideMarkdown) {
@@ -999,6 +1313,8 @@ static void ReadFile(StringPtr name, short vRefNum)
     DisposeHandle(textH);
 
     gDirty = false;
+    ClearUndoRedoStacks();
+    UpdateEditMenuState();
     RefreshActiveView();
     AdjustScrollbar();
     InvalRect(&gWindow->portRect);
@@ -1107,6 +1423,8 @@ static void DoNewFile(void)
     TEDelete(gTE);
     gHaveFile = false;
     gDirty = false;
+    ClearUndoRedoStacks();
+    UpdateEditMenuState();
     RefreshActiveView();
     AdjustScrollbar();
     InvalRect(&gWindow->portRect);
@@ -1757,8 +2075,18 @@ static void DoMenuCommand(long menuResult)
                     gDone = true;
                 break;
         }
+    } else if (menuID == mEdit) {
+        switch (menuItem) {
+            case iUndo:  DoUndo(); break;
+            case iRedo:  DoRedo(); break;
+            case iCut:   DoCut(); break;
+            case iCopy:  DoCopy(); break;
+            case iPaste: DoPaste(); break;
+        }
     } else if (menuID == mStyle) {
         gDirty = true;
+        PushUndoSnapshot();
+        gTypingRunActive = false;
         if (gHideMarkdown) {
             switch (menuItem) {
                 case iBold:   ToggleFace(bold); break;
@@ -1822,6 +2150,7 @@ static void EventLoop(void)
                 case mouseDown:
                     part = FindWindow(event.where, &w);
                     if (part == inMenuBar) {
+                        UpdateEditMenuState();
                         DoMenuCommand(MenuSelect(event.where));
                     } else if (part == inContent) {
                         ControlHandle hitControl;
@@ -1830,20 +2159,39 @@ static void EventLoop(void)
                         GlobalToLocal(&event.where);
                         if (FindControl(event.where, w, &hitControl) != 0 && hitControl == gScrollBar)
                             DoScrollClick(event.where);
-                        else
+                        else {
+                            gTypingRunActive = false;
                             TEClick(event.where, (event.modifiers & shiftKey) != 0, gActiveTE);
+                        }
                     }
                     break;
 
                 case keyDown:
                 case autoKey: {
                     char key = event.message & charCodeMask;
+                    Boolean isContentKey = (key < 0x1C || key > 0x1F);
+
                     if (event.modifiers & cmdKey) {
-                        if (event.what == keyDown)
-                            DoMenuCommand(MenuKey(key));
+                        if (event.what == keyDown) {
+                            if ((key == 'z' || key == 'Z') && (event.modifiers & shiftKey))
+                                DoRedo();
+                            else {
+                                UpdateEditMenuState();
+                                DoMenuCommand(MenuKey(key));
+                            }
+                        }
                     } else {
+                        if (isContentKey) {
+                            if (!gTypingRunActive) {
+                                PushUndoSnapshot();
+                                gTypingRunActive = true;
+                            }
+                        } else {
+                            gTypingRunActive = false;
+                        }
+
                         TEKey(key, gActiveTE);
-                        if (key < 0x1C || key > 0x1F) {
+                        if (isContentKey) {
                             gDirty = true;
                             if (gHideMarkdown)
                                 DetectInlineMarkdown(key);
