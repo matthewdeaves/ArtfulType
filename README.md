@@ -55,10 +55,6 @@ Saved files are plain `.md` text, editable in any text editor.
 | Link | ⌘L |
 | Zoom In / Out / Default | ⌘= / ⌘- / ⌘0 |
 
-## Known Limitations
-
-- Copying styled text (bold/italic/etc.) in Writer mode and pasting it back loses the styling — only plain text round-trips through the clipboard, a limitation of the cross-compiler toolchain this app is built with.
-
 ## Building
 
 Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compiler for classic Mac OS. See `app/CMakeLists.txt` for the build configuration, and `deploy.sh` / `build-bluescsi-image.sh` / `package-release.sh` for the build-to-disk-image pipeline.

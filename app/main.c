@@ -1073,33 +1073,311 @@ static void DoRedo(void)
     TEToScrap/TEFromScrap pattern -- TEToScrap/TEFromScrap are declared
     in this toolchain's headers but have no actual implementation
     linked anywhere (confirmed: linker error, not a typo), so they're
-    unusable here. This means plain text round-trips through the
-    system clipboard correctly (including to/from other apps), but
-    styling (bold/italic/heading/link) doesn't survive a copy in
-    Writer mode -- pasted text always comes in unstyled. Acceptable
-    trade-off given the alternative (hand-rolling a 'styl' scrap
-    blob) for a toolchain limitation, not a design choice.
+    unusable here.
+
+    Styling still survives a copy within Writer mode, just not via the
+    clipboard's own (unavailable) style support: copying a Writer-mode
+    selection encodes its styled runs as markdown text (the same
+    inline bold/italic/code/link delimiters SyncHiddenToCanonical
+    already produces for the whole document, just scoped to a range
+    instead of per-line -- so headings specifically aren't
+    re-derived, since they're a line-level construct that doesn't
+    make sense for an arbitrary sub-range), and pasting back into
+    Writer mode parses that text for the same delimiters and applies
+    the corresponding styles (mirroring BuildHiddenView's inline
+    parsing, again without heading handling). Plain text round-trips
+    unchanged either way, including to/from other apps -- a paste
+    that happens to contain a literal "*" or "`" from some other
+    source will get (mis)interpreted as markdown, an accepted
+    trade-off for getting styled copy/paste working at all. Markdown
+    mode's copy/paste is untouched -- the selection is already raw
+    markdown text, no encoding/decoding needed.
 */
+static Handle EncodeSelectionAsMarkdown(short start, short end, TEHandle te)
+{
+    Handle srcH;
+    Handle outH;
+    long outCap;
+    long outLen;
+    long urlSpace;
+    short li;
+    short monacoFont;
+    long i;
+    Boolean inBold = false, inItalic = false, inCode = false, inLink = false;
+    Str255 curLinkURL;
+
+    srcH = (**te).hText;
+    urlSpace = 0;
+    for (li = 1; li <= gLinkCount; li++)
+        urlSpace += gLinkURLs[li][0];
+    outCap = (long) (end - start) * 2 + 64 + urlSpace;
+    outH = NewHandle(outCap);
+    outLen = 0;
+
+    GetFNum("\pMonaco", &monacoFont);
+
+    HLock(srcH);
+    HLock(outH);
+
+    i = start;
+    while (i <= end) {
+        Boolean wantBold = false, wantItalic = false, wantCode = false, wantLink = false;
+        short linkID = 0;
+
+        if (i < end) {
+            TextStyle st;
+            short dlh, dfa;
+
+            TEGetStyle((short) i, &st, &dlh, &dfa, te);
+            wantBold = (st.tsFace & bold) != 0;
+            wantItalic = (st.tsFace & italic) != 0;
+            wantCode = (st.tsFont == monacoFont);
+            wantLink = (st.tsFace & underline) != 0;
+            linkID = st.tsColor.red;
+        }
+
+        if (inCode && !wantCode) { (*outH)[outLen++] = '`'; inCode = false; }
+        if (inItalic && !wantItalic) { (*outH)[outLen++] = '*'; inItalic = false; }
+        if (inBold && !wantBold) {
+            (*outH)[outLen++] = '*';
+            (*outH)[outLen++] = '*';
+            inBold = false;
+        }
+        if (inLink && !wantLink) {
+            (*outH)[outLen++] = ']';
+            (*outH)[outLen++] = '(';
+            BlockMove(curLinkURL + 1, *outH + outLen, curLinkURL[0]);
+            outLen += curLinkURL[0];
+            (*outH)[outLen++] = ')';
+            inLink = false;
+        }
+
+        if (!inLink && wantLink) {
+            (*outH)[outLen++] = '[';
+            inLink = true;
+            if (linkID >= 1 && linkID <= gLinkCount)
+                BlockMove(gLinkURLs[linkID], curLinkURL, gLinkURLs[linkID][0] + 1);
+            else
+                curLinkURL[0] = 0;
+        }
+        if (!inBold && wantBold) {
+            (*outH)[outLen++] = '*';
+            (*outH)[outLen++] = '*';
+            inBold = true;
+        }
+        if (!inItalic && wantItalic) { (*outH)[outLen++] = '*'; inItalic = true; }
+        if (!inCode && wantCode) { (*outH)[outLen++] = '`'; inCode = true; }
+
+        if (i < end)
+            (*outH)[outLen++] = (*srcH)[i];
+        i++;
+    }
+
+    HUnlock(srcH);
+    HUnlock(outH);
+    SetHandleSize(outH, outLen);
+
+    return outH;
+}
+
+static void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
+{
+    Handle outH;
+    long outLen;
+    long i;
+    static StyleOp ops[MAX_STYLE_OPS];
+    short opCount = 0;
+    short insertStart;
+    short k;
+    TextStyle baseStyle;
+    short fontNum;
+
+    outH = NewHandle(srcLen + 1);
+    outLen = 0;
+
+    HLock(srcH);
+    HLock(outH);
+
+    i = 0;
+    while (i < srcLen) {
+        if (i + 1 < srcLen && (*srcH)[i] == '*' && (*srcH)[i + 1] == '*') {
+            long j = i + 2;
+
+            while (j + 1 < srcLen && !((*srcH)[j] == '*' && (*srcH)[j + 1] == '*'))
+                j++;
+            if (j + 1 < srcLen) {
+                long outStart = outLen, m;
+
+                for (m = i + 2; m < j; m++)
+                    (*outH)[outLen++] = (*srcH)[m];
+                if (opCount < MAX_STYLE_OPS) {
+                    ops[opCount].start = (short) outStart;
+                    ops[opCount].end = (short) outLen;
+                    ops[opCount].kind = 'B';
+                    opCount++;
+                }
+                i = j + 2;
+                continue;
+            }
+        }
+        if ((*srcH)[i] == '*') {
+            long j = i + 1;
+
+            while (j < srcLen && (*srcH)[j] != '*')
+                j++;
+            if (j < srcLen) {
+                long outStart = outLen, m;
+
+                for (m = i + 1; m < j; m++)
+                    (*outH)[outLen++] = (*srcH)[m];
+                if (opCount < MAX_STYLE_OPS) {
+                    ops[opCount].start = (short) outStart;
+                    ops[opCount].end = (short) outLen;
+                    ops[opCount].kind = 'I';
+                    opCount++;
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        if ((*srcH)[i] == '`') {
+            long j = i + 1;
+
+            while (j < srcLen && (*srcH)[j] != '`')
+                j++;
+            if (j < srcLen) {
+                long outStart = outLen, m;
+
+                for (m = i + 1; m < j; m++)
+                    (*outH)[outLen++] = (*srcH)[m];
+                if (opCount < MAX_STYLE_OPS) {
+                    ops[opCount].start = (short) outStart;
+                    ops[opCount].end = (short) outLen;
+                    ops[opCount].kind = 'C';
+                    opCount++;
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        if ((*srcH)[i] == '[') {
+            long closeBracket = i + 1;
+
+            while (closeBracket < srcLen && (*srcH)[closeBracket] != ']')
+                closeBracket++;
+            if (closeBracket < srcLen && closeBracket + 1 < srcLen && (*srcH)[closeBracket + 1] == '(') {
+                long closeParen = closeBracket + 2;
+
+                while (closeParen < srcLen && (*srcH)[closeParen] != ')')
+                    closeParen++;
+                if (closeParen < srcLen) {
+                    long outStart = outLen, m;
+                    Str255 url;
+                    long urlLen = closeParen - (closeBracket + 2);
+
+                    for (m = i + 1; m < closeBracket; m++)
+                        (*outH)[outLen++] = (*srcH)[m];
+                    if (urlLen > 255) urlLen = 255;
+                    url[0] = (unsigned char) urlLen;
+                    BlockMove(*srcH + closeBracket + 2, url + 1, urlLen);
+                    if (opCount < MAX_STYLE_OPS) {
+                        ops[opCount].start = (short) outStart;
+                        ops[opCount].end = (short) outLen;
+                        ops[opCount].kind = 'L';
+                        ops[opCount].linkID = AddLinkURL(url);
+                        opCount++;
+                    }
+                    i = closeParen + 1;
+                    continue;
+                }
+            }
+        }
+
+        (*outH)[outLen++] = (*srcH)[i];
+        i++;
+    }
+
+    HUnlock(srcH);
+    HUnlock(outH);
+
+    insertStart = (**te).selStart;
+    TEInsert(*outH, outLen, te);
+    DisposeHandle(outH);
+
+    /* TEInsert's new text inherits whatever style was at the
+       insertion point -- normalize the whole pasted range to plain
+       before applying the specific ops parsed above, the same order
+       BuildHiddenView uses for the same reason. */
+    GetFNum("\pTimes", &fontNum);
+    baseStyle.tsFont = fontNum;
+    baseStyle.tsFace = normal;
+    baseStyle.tsSize = CurrentFontSize();
+    baseStyle.tsColor.red = baseStyle.tsColor.green = baseStyle.tsColor.blue = 0;
+    TESetSelect(insertStart, (short) (insertStart + outLen), te);
+    TESetStyle(doFont + doFace + doSize + doColor, &baseStyle, true, te);
+
+    for (k = 0; k < opCount; k++) {
+        TextStyle opStyle;
+
+        TESetSelect((short) (insertStart + ops[k].start), (short) (insertStart + ops[k].end), te);
+        switch (ops[k].kind) {
+            case 'B':
+                opStyle.tsFace = bold;
+                TESetStyle(doFace, &opStyle, true, te);
+                break;
+            case 'I':
+                opStyle.tsFace = italic;
+                TESetStyle(doFace, &opStyle, true, te);
+                break;
+            case 'C':
+                GetFNum("\pMonaco", &opStyle.tsFont);
+                TESetStyle(doFont, &opStyle, true, te);
+                break;
+            case 'L':
+                opStyle.tsFace = underline;
+                opStyle.tsColor.red = ops[k].linkID;
+                opStyle.tsColor.green = 0;
+                opStyle.tsColor.blue = 0;
+                TESetStyle(doFace + doColor, &opStyle, true, te);
+                break;
+        }
+    }
+
+    TESetSelect((short) (insertStart + outLen), (short) (insertStart + outLen), te);
+}
+
 static void DoCut(void)
 {
     short selStart, selEnd;
     long selLen;
-    Handle textH;
+    Handle scrapText;
 
     selStart = (**gActiveTE).selStart;
     selEnd = (**gActiveTE).selEnd;
     if (selStart == selEnd)
         return;
 
-    selLen = selEnd - selStart;
-    textH = (**gActiveTE).hText;
+    if (gHideMarkdown) {
+        scrapText = EncodeSelectionAsMarkdown(selStart, selEnd, gActiveTE);
+    } else {
+        Handle textH = (**gActiveTE).hText;
+
+        selLen = selEnd - selStart;
+        scrapText = NewHandle(selLen);
+        HLock(textH);
+        HLock(scrapText);
+        BlockMove(*textH + selStart, *scrapText, selLen);
+        HUnlock(textH);
+        HUnlock(scrapText);
+    }
 
     PushUndoSnapshot();
 
     ZeroScrap();
-    HLock(textH);
-    PutScrap(selLen, 'TEXT', *textH + selStart);
-    HUnlock(textH);
+    HLock(scrapText);
+    PutScrap(GetHandleSize(scrapText), 'TEXT', *scrapText);
+    HUnlock(scrapText);
+    DisposeHandle(scrapText);
 
     TEDelete(gActiveTE);
 
@@ -1112,20 +1390,32 @@ static void DoCopy(void)
 {
     short selStart, selEnd;
     long selLen;
-    Handle textH;
+    Handle scrapText;
 
     selStart = (**gActiveTE).selStart;
     selEnd = (**gActiveTE).selEnd;
     if (selStart == selEnd)
         return;
 
-    selLen = selEnd - selStart;
-    textH = (**gActiveTE).hText;
+    if (gHideMarkdown) {
+        scrapText = EncodeSelectionAsMarkdown(selStart, selEnd, gActiveTE);
+    } else {
+        Handle textH = (**gActiveTE).hText;
+
+        selLen = selEnd - selStart;
+        scrapText = NewHandle(selLen);
+        HLock(textH);
+        HLock(scrapText);
+        BlockMove(*textH + selStart, *scrapText, selLen);
+        HUnlock(textH);
+        HUnlock(scrapText);
+    }
 
     ZeroScrap();
-    HLock(textH);
-    PutScrap(selLen, 'TEXT', *textH + selStart);
-    HUnlock(textH);
+    HLock(scrapText);
+    PutScrap(GetHandleSize(scrapText), 'TEXT', *scrapText);
+    HUnlock(scrapText);
+    DisposeHandle(scrapText);
 }
 
 static void DoPaste(void)
@@ -1143,10 +1433,15 @@ static void DoPaste(void)
 
     PushUndoSnapshot();
 
-    HLock(scrapH);
-    TEInsert(*scrapH, len, gActiveTE);
-    HUnlock(scrapH);
-    DisposeHandle(scrapH);
+    if (gHideMarkdown) {
+        InsertMarkdownAsStyled(scrapH, len, gActiveTE);
+        DisposeHandle(scrapH);
+    } else {
+        HLock(scrapH);
+        TEInsert(*scrapH, len, gActiveTE);
+        HUnlock(scrapH);
+        DisposeHandle(scrapH);
+    }
 
     gDirty = true;
     gTypingRunActive = false;
