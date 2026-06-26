@@ -78,12 +78,13 @@
 
 #define MAX_STYLE_OPS 512
 
-/* Zoom levels (point deltas from FONT_SIZE) restricted to sizes that have
-   a real Times bitmap (12/14/18/24pt) -- confirmed by reading the FOND
-   resource directly rather than assuming. 24pt is the largest bitmap this
-   font has, so there's no graceful way to offer anything bigger. */
-static short kZoomLevels[] = { -6, -4, 0, 6 };
-#define kNumZoomLevels 4
+/* Zoom levels (point deltas from FONT_SIZE). 12/14/18/24pt have a real
+   Times bitmap -- confirmed by reading the FOND resource directly rather
+   than assuming. The 30pt level has no native bitmap (24pt is the
+   largest this font has) and renders as a scaled enlargement of the
+   24pt bitmap instead -- a known, accepted tradeoff for going bigger. */
+static short kZoomLevels[] = { -6, -4, 0, 6, 12 };
+#define kNumZoomLevels 5
 #define kZoomBaselineIndex 2
 
 #define kZoomPrefType 'ZLvl'
@@ -2580,9 +2581,29 @@ static void ShowSplashScreen(void)
     Boolean done = false;
 
     while (!done) {
+        Rect screenBounds;
+        Rect dlgBounds;
+        short dlgWidth, dlgHeight;
+        short newLeft, newTop;
+
         dlg = GetNewDialog(kSplashDialog, NULL, (WindowPtr) -1L);
         if (dlg == NULL)
             return;
+
+        /* The DLOG resource's bounds only center it on a 512x342
+           compact Mac screen. Reposition here instead, based on the
+           actual screen size, so it's centered on any resolution.
+           The DLOG is marked invisible so this happens before the
+           dialog is ever shown -- no flash at the wrong position. */
+        screenBounds = qd.screenBits.bounds;
+        screenBounds.top += MENU_BAR_HEIGHT;
+        dlgBounds = ((GrafPtr) dlg)->portRect;
+        dlgWidth = dlgBounds.right - dlgBounds.left;
+        dlgHeight = dlgBounds.bottom - dlgBounds.top;
+        newLeft = screenBounds.left + (screenBounds.right - screenBounds.left - dlgWidth) / 2;
+        newTop = screenBounds.top + (screenBounds.bottom - screenBounds.top - dlgHeight) / 2;
+        MoveWindow(dlg, newLeft, newTop, false);
+        ShowWindow(dlg);
 
         GetDialogItem(dlg, iSplashTitle, &type, &itemH, &box);
         SetDialogItem(dlg, iSplashTitle, type, (Handle) NewUserItemUPP(DrawSplashTitle), &box);

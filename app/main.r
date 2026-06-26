@@ -37,7 +37,7 @@ resource 'DITL' (131) {
 resource 'DLOG' (131) {
     {61, 66, 301, 446},
     dBoxProc,
-    visible,
+    invisible,
     noGoAway,
     0,
     131,
