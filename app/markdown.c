@@ -1025,6 +1025,7 @@ void DetectInlineMarkdown(char justTyped)
     long len;
     long caret;
     long lineStart;
+    long lineEnd;
 
     if (justTyped == '\r') {
         SetTypingStyleNormal((**gHiddenTE).selEnd);
@@ -1040,6 +1041,10 @@ void DetectInlineMarkdown(char justTyped)
     lineStart = caret;
     while (lineStart > 0 && (*textH)[lineStart - 1] != '\r')
         lineStart--;
+
+    lineEnd = caret;
+    while (lineEnd < len && (*textH)[lineEnd] != '\r')
+        lineEnd++;
 
     if (justTyped == ' ') {
         short level = 0;
@@ -1085,6 +1090,34 @@ void DetectInlineMarkdown(char justTyped)
                 }
                 p--;
             }
+
+            /* No opening ** behind the caret -- the just-typed ** may
+               instead be an OPENING delimiter for a closing ** that's
+               already sitting later in the line (going back to bold
+               text that was typed earlier, closing delimiter first). */
+            {
+                long q = caret + 1;
+
+                while (q + 1 < lineEnd) {
+                    if ((*textH)[q] == '*' && (*textH)[q + 1] == '*') {
+                        long innerEnd = q;
+                        TextStyle ts;
+
+                        HUnlock(textH);
+                        TESetSelect((short) innerEnd, (short) (innerEnd + 2), gHiddenTE);
+                        TEDelete(gHiddenTE);
+                        TESetSelect((short) (caret - 2), (short) caret, gHiddenTE);
+                        TEDelete(gHiddenTE);
+
+                        ts.tsFace = bold;
+                        TESetSelect((short) (caret - 2), (short) (innerEnd - 2), gHiddenTE);
+                        TESetStyle(doFace, &ts, true, gHiddenTE);
+                        SetTypingStyleNormal((short) (caret - 2));
+                        return;
+                    }
+                    q++;
+                }
+            }
         } else if (caret >= 3 && (*textH)[caret - 2] != '*') {
             long p = caret - 2;
 
@@ -1110,6 +1143,36 @@ void DetectInlineMarkdown(char justTyped)
                 }
                 p--;
             }
+
+            /* No opening * behind the caret -- the just-typed * may
+               instead be an OPENING italic delimiter for a closing *
+               that's already sitting later in the line. */
+            {
+                long q = caret;
+
+                while (q < lineEnd) {
+                    if ((*textH)[q] == '*' &&
+                        (*textH)[q - 1] != '*' &&
+                        (q + 1 == lineEnd || (*textH)[q + 1] != '*') &&
+                        q > caret) {
+                        long innerEnd = q;
+                        TextStyle ts;
+
+                        HUnlock(textH);
+                        TESetSelect((short) innerEnd, (short) (innerEnd + 1), gHiddenTE);
+                        TEDelete(gHiddenTE);
+                        TESetSelect((short) (caret - 1), (short) caret, gHiddenTE);
+                        TEDelete(gHiddenTE);
+
+                        ts.tsFace = italic;
+                        TESetSelect((short) (caret - 1), (short) (innerEnd - 1), gHiddenTE);
+                        TESetStyle(doFace, &ts, true, gHiddenTE);
+                        SetTypingStyleNormal((short) (caret - 1));
+                        return;
+                    }
+                    q++;
+                }
+            }
         }
     } else if (justTyped == '`') {
         long p = caret - 2;
@@ -1133,6 +1196,33 @@ void DetectInlineMarkdown(char justTyped)
                 return;
             }
             p--;
+        }
+
+        /* No opening ` behind the caret -- the just-typed ` may instead
+           be an OPENING code delimiter for a closing ` already sitting
+           later in the line. */
+        {
+            long q = caret;
+
+            while (q < lineEnd) {
+                if ((*textH)[q] == '`' && q > caret) {
+                    long innerEnd = q;
+                    TextStyle ts;
+
+                    HUnlock(textH);
+                    TESetSelect((short) innerEnd, (short) (innerEnd + 1), gHiddenTE);
+                    TEDelete(gHiddenTE);
+                    TESetSelect((short) (caret - 1), (short) caret, gHiddenTE);
+                    TEDelete(gHiddenTE);
+
+                    GetFNum("\pMonaco", &ts.tsFont);
+                    TESetSelect((short) (caret - 1), (short) (innerEnd - 1), gHiddenTE);
+                    TESetStyle(doFont, &ts, true, gHiddenTE);
+                    SetTypingStyleNormal((short) (caret - 1));
+                    return;
+                }
+                q++;
+            }
         }
     } else if (justTyped == ')') {
         long closeParenPos = caret - 1;
