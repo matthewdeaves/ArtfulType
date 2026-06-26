@@ -65,12 +65,19 @@
 #define iLinkCancel  2
 #define iLinkField   4
 
+#define kAboutDialog 133
+#define iAboutOK     1
+#define iAboutTitle  2
+
 #define mView        130
 #define iMarkdownView 1
 #define iWriterView  2
 #define iZoomIn      4
 #define iZoomOut     5
 #define iZoomDefault 6
+
+#define mHelp    132
+#define iAbout   1
 
 #define MAX_STYLE_OPS 512
 
@@ -201,5 +208,6 @@ void DoNewFile(void);
 
 /* splash.c */
 void ShowSplashScreen(void);
+void ShowAboutBox(void);
 
 #endif

@@ -77,6 +77,7 @@ static void MakeMenu(void)
 {
     MenuHandle fileMenu;
     MenuHandle styleMenu;
+    MenuHandle helpMenu;
 
     fileMenu = NewMenu(mFile, "\pFile");
     AppendMenu(fileMenu, "\pNew/N;Open.../O;Save/S;Save As...;(-;Quit/Q");
@@ -100,6 +101,10 @@ static void MakeMenu(void)
     AppendMenu(gViewMenu, "\pMarkdown;Writer;(-;Zoom In/=;Zoom Out/-;Default Size/0");
     InsertMenu(gViewMenu, 0);
     CheckItem(gViewMenu, iWriterView, true);
+
+    helpMenu = NewMenu(mHelp, "\pHelp");
+    AppendMenu(helpMenu, "\pAbout The Artful Type...");
+    InsertMenu(helpMenu, 0);
 
     UpdateMenuBarLook();
 }
@@ -219,6 +224,10 @@ static void DoMenuCommand(long menuResult)
             case iZoomIn:       DoZoom(1); break;
             case iZoomOut:      DoZoom(-1); break;
             case iZoomDefault:  DoZoomReset(); break;
+        }
+    } else if (menuID == mHelp) {
+        switch (menuItem) {
+            case iAbout: ShowAboutBox(); break;
         }
     }
     HiliteMenu(0);

@@ -65,6 +65,24 @@ resource 'DLOG' (132) {
     noAutoCenter
 };
 
+resource 'DITL' (133) {
+    {
+        {206, 140, 228, 240}, Button { enabled, "OK" },
+        {12, 15, 196, 365}, UserItem { disabled }
+    }
+};
+
+resource 'DLOG' (133) {
+    {61, 66, 301, 446},
+    dBoxProc,
+    invisible,
+    noGoAway,
+    0,
+    133,
+    "",
+    noAutoCenter
+};
+
 resource 'ICN#' (128) {
     {
         $"00000000000000000000000000000000"

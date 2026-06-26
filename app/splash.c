@@ -18,6 +18,10 @@ static const unsigned char kSplashImageBits[kSplashImageHeight * kSplashImageRow
 #include "splash_image.h"
 };
 
+/* Bump this on every release. */
+static const unsigned char kVersionString[] = "\pv0.1.2-alpha";
+static const unsigned char kGitHubURL[] = "\pgithub.com/ActionRetro";
+
 static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
 {
     DialogItemType type;
@@ -55,10 +59,42 @@ static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
     MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 144);
     DrawString(s);
 
-    BlockMove("\pby Action Retro", s, 16);
+    BlockMove(kVersionString, s, kVersionString[0] + 1);
     textWidth = StringWidth(s);
-    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 160);
+    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 158);
     DrawString(s);
+
+    TextFace(bold);
+    BlockMove(kGitHubURL, s, kGitHubURL[0] + 1);
+    textWidth = StringWidth(s);
+    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 172);
+    DrawString(s);
+    TextFace(normal);
+}
+
+/*
+    The DLOG resource's bounds only center it on a 512x342 compact Mac
+    screen. Reposition here instead, based on the actual screen size,
+    so it's centered on any resolution. The DLOG is marked invisible
+    so this happens before the dialog is ever shown -- no flash at
+    the wrong position.
+*/
+static void CenterAndShowDialog(DialogPtr dlg)
+{
+    Rect screenBounds;
+    Rect dlgBounds;
+    short dlgWidth, dlgHeight;
+    short newLeft, newTop;
+
+    screenBounds = qd.screenBits.bounds;
+    screenBounds.top += MENU_BAR_HEIGHT;
+    dlgBounds = ((GrafPtr) dlg)->portRect;
+    dlgWidth = dlgBounds.right - dlgBounds.left;
+    dlgHeight = dlgBounds.bottom - dlgBounds.top;
+    newLeft = screenBounds.left + (screenBounds.right - screenBounds.left - dlgWidth) / 2;
+    newTop = screenBounds.top + (screenBounds.bottom - screenBounds.top - dlgHeight) / 2;
+    MoveWindow(dlg, newLeft, newTop, false);
+    ShowWindow(dlg);
 }
 
 void ShowSplashScreen(void)
@@ -71,29 +107,11 @@ void ShowSplashScreen(void)
     Boolean done = false;
 
     while (!done) {
-        Rect screenBounds;
-        Rect dlgBounds;
-        short dlgWidth, dlgHeight;
-        short newLeft, newTop;
-
         dlg = GetNewDialog(kSplashDialog, NULL, (WindowPtr) -1L);
         if (dlg == NULL)
             return;
 
-        /* The DLOG resource's bounds only center it on a 512x342
-           compact Mac screen. Reposition here instead, based on the
-           actual screen size, so it's centered on any resolution.
-           The DLOG is marked invisible so this happens before the
-           dialog is ever shown -- no flash at the wrong position. */
-        screenBounds = qd.screenBits.bounds;
-        screenBounds.top += MENU_BAR_HEIGHT;
-        dlgBounds = ((GrafPtr) dlg)->portRect;
-        dlgWidth = dlgBounds.right - dlgBounds.left;
-        dlgHeight = dlgBounds.bottom - dlgBounds.top;
-        newLeft = screenBounds.left + (screenBounds.right - screenBounds.left - dlgWidth) / 2;
-        newTop = screenBounds.top + (screenBounds.bottom - screenBounds.top - dlgHeight) / 2;
-        MoveWindow(dlg, newLeft, newTop, false);
-        ShowWindow(dlg);
+        CenterAndShowDialog(dlg);
 
         GetDialogItem(dlg, iSplashTitle, &type, &itemH, &box);
         SetDialogItem(dlg, iSplashTitle, type, (Handle) NewUserItemUPP(DrawSplashTitle), &box);
@@ -109,4 +127,33 @@ void ShowSplashScreen(void)
         /* Open Document, then Cancel in the file picker -- show the splash again */
         done = (item == iSplashNew) || DoOpenFile();
     }
+}
+
+/* Help -> About: same branding dialog as the startup splash, but with
+   a single OK button instead of New/Open, since this is shown during
+   active editing rather than at startup. */
+void ShowAboutBox(void)
+{
+    DialogPtr dlg;
+    short item;
+    DialogItemType type;
+    Handle itemH;
+    Rect box;
+
+    dlg = GetNewDialog(kAboutDialog, NULL, (WindowPtr) -1L);
+    if (dlg == NULL)
+        return;
+
+    CenterAndShowDialog(dlg);
+
+    GetDialogItem(dlg, iAboutTitle, &type, &itemH, &box);
+    SetDialogItem(dlg, iAboutTitle, type, (Handle) NewUserItemUPP(DrawSplashTitle), &box);
+
+    do {
+        ModalDialog(NULL, &item);
+    } while (item != iAboutOK);
+
+    DisposeDialog(dlg);
+    SetPort(gWindow);
+    UpdateMenuBarLook();
 }
