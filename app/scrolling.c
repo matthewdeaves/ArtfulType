@@ -26,6 +26,39 @@ static void SyncScrollbarToOffset(void)
 }
 
 /*
+    TEGetHeight(nLines, 0, te) and the two calls in ScrollCaretIntoView
+    below are cumulative-from-line-0 height sums -- the form that's
+    proven reliable (see the comment in ScrollCaretIntoView), but O(n)
+    in the document's current line count. Calling that on every single
+    keystroke is fine on a fast emulator but visibly slows typing down
+    on real 68000 hardware as a document grows. These two small caches
+    skip the recompute whenever nothing that affects the answer has
+    changed since the last call -- the underlying TEGetHeight calls and
+    their cumulative-from-0 form are otherwise untouched.
+
+    Invalidated via InvalidateHeightCache(): unconditionally from
+    AdjustScrollbar (the full/infrequent path covering style changes,
+    zoom, mode switches, undo/redo, save/load -- anything that can
+    change a line's height without necessarily changing nLines), and
+    from DetectInlineMarkdown's live-typing conversions (markdown.c),
+    since those happen within the fast per-keystroke path and can also
+    change a line's height (heading conversion) without changing
+    nLines.
+*/
+static short gCachedTotalHeightNLines = -1;
+static long gCachedTotalHeight = 0;
+
+static short gCachedCaretLine = -1;
+static long gCachedHeightToLine = 0;
+static long gCachedHeightToLineNext = 0;
+
+void InvalidateHeightCache(void)
+{
+    gCachedTotalHeightNLines = -1;
+    gCachedCaretLine = -1;
+}
+
+/*
     Updates the scrollbar's range/visibility only -- no clamping of the
     current position. Used on the typing path, where ScrollCaretIntoView
     already owns getting the position right; re-deriving maxVal from
@@ -41,7 +74,13 @@ void UpdateScrollbarRange(void)
     short maxVal;
     Boolean shouldShow;
 
-    textHeight = TEGetHeight((**gActiveTE).nLines, 0, gActiveTE);
+    if ((**gActiveTE).nLines == gCachedTotalHeightNLines) {
+        textHeight = gCachedTotalHeight;
+    } else {
+        textHeight = TEGetHeight((**gActiveTE).nLines, 0, gActiveTE);
+        gCachedTotalHeightNLines = (**gActiveTE).nLines;
+        gCachedTotalHeight = textHeight;
+    }
     viewHeight = (**gActiveTE).viewRect.bottom - (**gActiveTE).viewRect.top;
 
     maxVal = (textHeight > viewHeight) ? (short) (textHeight - viewHeight) : 0;
@@ -70,6 +109,7 @@ void AdjustScrollbar(void)
     short maxVal;
     short curOffset;
 
+    InvalidateHeightCache();
     UpdateScrollbarRange();
 
     maxVal = GetControlMaximum(gScrollBar);
@@ -82,18 +122,29 @@ void AdjustScrollbar(void)
     SyncScrollbarToOffset();
 }
 
+/* lineStarts[] is sorted, so the line containing pos is found with a
+   binary search instead of a linear scan -- same result, no behavior
+   change, just faster for documents with many lines. */
 static short LineContaining(TEHandle te, short pos)
 {
-    short line = 0;
+    short low = 0;
+    short high = (**te).nLines - 1;
 
-    while (line < (**te).nLines - 1 && (**te).lineStarts[line + 1] <= pos)
-        line++;
-    return line;
+    while (low < high) {
+        short mid = low + (high - low + 1) / 2;
+
+        if ((**te).lineStarts[mid] <= pos)
+            low = mid;
+        else
+            high = mid - 1;
+    }
+    return low;
 }
 
 void ScrollCaretIntoView(void)
 {
     short caretLine;
+    long heightToLine, heightToLineNext;
     short lineTop, lineBottom;
     short viewTop, viewBottom;
 
@@ -107,9 +158,23 @@ void ScrollCaretIntoView(void)
        than tracking the actual current font size. Avoid isolated
        single-line queries entirely: always sum cumulatively from the
        very start of the document, the same pattern already proven
-       reliable in UpdateScrollbarRange's TEGetHeight(nLines, 0, ...). */
-    lineTop = (**gActiveTE).destRect.top + TEGetHeight(caretLine, 0, gActiveTE);
-    lineBottom = (**gActiveTE).destRect.top + TEGetHeight(caretLine + 1, 0, gActiveTE);
+       reliable in UpdateScrollbarRange's TEGetHeight(nLines, 0, ...).
+       Cached below (see InvalidateHeightCache) since this is otherwise
+       an O(n) call on every keystroke -- the raw heights are cached
+       rather than the final lineTop/lineBottom, since those also
+       depend on destRect.top, which changes on scroll. */
+    if (caretLine == gCachedCaretLine) {
+        heightToLine = gCachedHeightToLine;
+        heightToLineNext = gCachedHeightToLineNext;
+    } else {
+        heightToLine = TEGetHeight(caretLine, 0, gActiveTE);
+        heightToLineNext = TEGetHeight(caretLine + 1, 0, gActiveTE);
+        gCachedCaretLine = caretLine;
+        gCachedHeightToLine = heightToLine;
+        gCachedHeightToLineNext = heightToLineNext;
+    }
+    lineTop = (**gActiveTE).destRect.top + heightToLine;
+    lineBottom = (**gActiveTE).destRect.top + heightToLineNext;
 
     viewTop = (**gActiveTE).viewRect.top;
     viewBottom = (**gActiveTE).viewRect.bottom;

@@ -1064,6 +1064,7 @@ void DetectInlineMarkdown(char justTyped)
             ts.tsFace = bold;
             ts.tsSize = CurrentFontSize() + (4 - level) * 4;
             TESetStyle(doFace + doSize, &ts, true, gHiddenTE);
+            InvalidateHeightCache();
             return;
         }
     } else if (justTyped == '*') {
@@ -1086,6 +1087,7 @@ void DetectInlineMarkdown(char justTyped)
                     TESetSelect((short) p, (short) (innerEnd - 2), gHiddenTE);
                     TESetStyle(doFace, &ts, true, gHiddenTE);
                     SetTypingStyleNormal((short) (innerEnd - 2));
+                    InvalidateHeightCache();
                     return;
                 }
                 p--;
@@ -1113,6 +1115,7 @@ void DetectInlineMarkdown(char justTyped)
                         TESetSelect((short) (caret - 2), (short) (innerEnd - 2), gHiddenTE);
                         TESetStyle(doFace, &ts, true, gHiddenTE);
                         SetTypingStyleNormal((short) (caret - 2));
+                        InvalidateHeightCache();
                         return;
                     }
                     q++;
@@ -1139,6 +1142,7 @@ void DetectInlineMarkdown(char justTyped)
                     TESetSelect((short) p, (short) (innerEnd - 1), gHiddenTE);
                     TESetStyle(doFace, &ts, true, gHiddenTE);
                     SetTypingStyleNormal((short) (innerEnd - 1));
+                    InvalidateHeightCache();
                     return;
                 }
                 p--;
@@ -1168,6 +1172,7 @@ void DetectInlineMarkdown(char justTyped)
                         TESetSelect((short) (caret - 1), (short) (innerEnd - 1), gHiddenTE);
                         TESetStyle(doFace, &ts, true, gHiddenTE);
                         SetTypingStyleNormal((short) (caret - 1));
+                        InvalidateHeightCache();
                         return;
                     }
                     q++;
@@ -1193,6 +1198,7 @@ void DetectInlineMarkdown(char justTyped)
                 TESetSelect((short) p, (short) (innerEnd - 1), gHiddenTE);
                 TESetStyle(doFont, &ts, true, gHiddenTE);
                 SetTypingStyleNormal((short) (innerEnd - 1));
+                InvalidateHeightCache();
                 return;
             }
             p--;
@@ -1219,6 +1225,7 @@ void DetectInlineMarkdown(char justTyped)
                     TESetSelect((short) (caret - 1), (short) (innerEnd - 1), gHiddenTE);
                     TESetStyle(doFont, &ts, true, gHiddenTE);
                     SetTypingStyleNormal((short) (caret - 1));
+                    InvalidateHeightCache();
                     return;
                 }
                 q++;
@@ -1268,6 +1275,7 @@ void DetectInlineMarkdown(char justTyped)
                 TESetSelect((short) openBracketPos, (short) (closeBracketPos - 1), gHiddenTE);
                 TESetStyle(doFace + doColor, &ts, true, gHiddenTE);
                 SetTypingStyleNormal((short) (closeBracketPos - 1));
+                InvalidateHeightCache();
                 return;
             }
         }
