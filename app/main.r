@@ -49,10 +49,6 @@ resource 'ALRT' (130) {
     alertPositionMainScreen
 };
 
-data 'ZLvl' (128) {
-    $"0002"
-};
-
 resource 'DITL' (131) {
     {
         {206, 60, 228, 180}, Button { enabled, "New Document" },
