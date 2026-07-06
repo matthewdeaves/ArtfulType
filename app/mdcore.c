@@ -258,3 +258,213 @@ long MdEmitInline(const char *src, long len,
 
     return outLen;
 }
+
+MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justTyped)
+{
+    MdInlineEdit e;
+    long lineStart, lineEnd;
+
+    e.kind = MD_INLINE_NONE;
+    e.level = 0;
+    e.del1Start = e.del1End = 0;
+    e.del2Start = e.del2End = 0;
+    e.styleStart = e.styleEnd = 0;
+    e.newCaret = 0;
+    e.resetNormal = 0;
+    e.linkURL[0] = 0;
+
+    lineStart = caret;
+    while (lineStart > 0 && buf[lineStart - 1] != '\r')
+        lineStart--;
+
+    lineEnd = caret;
+    while (lineEnd < len && buf[lineEnd] != '\r')
+        lineEnd++;
+
+    if (justTyped == ' ') {
+        short level = 0;
+        long p = lineStart;
+
+        while (level < 3 && p < caret - 1 && buf[p] == '#') {
+            level++;
+            p++;
+        }
+        if (level > 0 && p == caret - 1) {
+            /* "# " through "### " at line start: delete the prefix and the
+               space, then leave a bold, larger typing style in place so the
+               heading is typed live. No del2, no reset. */
+            e.kind = MD_KIND_HEADING;
+            e.level = level;
+            e.del1Start = lineStart;
+            e.del1End = caret;
+            e.styleStart = e.styleEnd = lineStart;
+            e.newCaret = lineStart;
+            e.resetNormal = 0;
+            return e;
+        }
+    } else if (justTyped == '*') {
+        if (caret >= 4 && buf[caret - 2] == '*' && buf[caret - 1] == '*') {
+            long p = caret - 4;
+
+            while (p >= lineStart) {
+                if (buf[p] == '*' && buf[p + 1] == '*' && p + 2 < caret - 2) {
+                    long innerStart = p + 2;
+                    long innerEnd = caret - 2;
+
+                    e.kind = MD_KIND_BOLD;
+                    e.del1Start = innerEnd; e.del1End = caret;
+                    e.del2Start = p;        e.del2End = innerStart;
+                    e.styleStart = p;       e.styleEnd = innerEnd - 2;
+                    e.newCaret = innerEnd - 2;
+                    e.resetNormal = 1;
+                    return e;
+                }
+                p--;
+            }
+
+            /* No opening ** behind the caret -- the just-typed ** may
+               instead be an OPENING delimiter for a closing ** already
+               sitting later in the line (bold typed closing-first). */
+            {
+                long q = caret + 1;
+
+                while (q + 1 < lineEnd) {
+                    if (buf[q] == '*' && buf[q + 1] == '*') {
+                        long innerEnd = q;
+
+                        e.kind = MD_KIND_BOLD;
+                        e.del1Start = innerEnd;  e.del1End = innerEnd + 2;
+                        e.del2Start = caret - 2; e.del2End = caret;
+                        e.styleStart = caret - 2; e.styleEnd = innerEnd - 2;
+                        e.newCaret = caret - 2;
+                        e.resetNormal = 1;
+                        return e;
+                    }
+                    q++;
+                }
+            }
+        } else if (caret >= 3 && buf[caret - 2] != '*') {
+            long p = caret - 2;
+
+            while (p >= lineStart) {
+                if (buf[p] == '*' &&
+                    (p == lineStart || buf[p - 1] != '*') &&
+                    buf[p + 1] != '*' && p + 1 < caret - 1) {
+                    long innerStart = p + 1;
+                    long innerEnd = caret - 1;
+
+                    e.kind = MD_KIND_ITALIC;
+                    e.del1Start = innerEnd; e.del1End = caret;
+                    e.del2Start = p;        e.del2End = innerStart;
+                    e.styleStart = p;       e.styleEnd = innerEnd - 1;
+                    e.newCaret = innerEnd - 1;
+                    e.resetNormal = 1;
+                    return e;
+                }
+                p--;
+            }
+
+            /* No opening * behind the caret -- the just-typed * may instead
+               be an OPENING italic delimiter for a closing * already later
+               in the line. */
+            {
+                long q = caret;
+
+                while (q < lineEnd) {
+                    if (buf[q] == '*' &&
+                        buf[q - 1] != '*' &&
+                        (q + 1 == lineEnd || buf[q + 1] != '*') &&
+                        q > caret) {
+                        long innerEnd = q;
+
+                        e.kind = MD_KIND_ITALIC;
+                        e.del1Start = innerEnd;  e.del1End = innerEnd + 1;
+                        e.del2Start = caret - 1; e.del2End = caret;
+                        e.styleStart = caret - 1; e.styleEnd = innerEnd - 1;
+                        e.newCaret = caret - 1;
+                        e.resetNormal = 1;
+                        return e;
+                    }
+                    q++;
+                }
+            }
+        }
+    } else if (justTyped == '`') {
+        long p = caret - 2;
+
+        while (p >= lineStart) {
+            if (buf[p] == '`' && p + 1 < caret - 1) {
+                long innerStart = p + 1;
+                long innerEnd = caret - 1;
+
+                e.kind = MD_KIND_CODE;
+                e.del1Start = innerEnd; e.del1End = caret;
+                e.del2Start = p;        e.del2End = innerStart;
+                e.styleStart = p;       e.styleEnd = innerEnd - 1;
+                e.newCaret = innerEnd - 1;
+                e.resetNormal = 1;
+                return e;
+            }
+            p--;
+        }
+
+        /* No opening ` behind the caret -- the just-typed ` may instead be
+           an OPENING code delimiter for a closing ` already later. */
+        {
+            long q = caret;
+
+            while (q < lineEnd) {
+                if (buf[q] == '`' && q > caret) {
+                    long innerEnd = q;
+
+                    e.kind = MD_KIND_CODE;
+                    e.del1Start = innerEnd;  e.del1End = innerEnd + 1;
+                    e.del2Start = caret - 1; e.del2End = caret;
+                    e.styleStart = caret - 1; e.styleEnd = innerEnd - 1;
+                    e.newCaret = caret - 1;
+                    e.resetNormal = 1;
+                    return e;
+                }
+                q++;
+            }
+        }
+    } else if (justTyped == ')') {
+        long closeParenPos = caret - 1;
+        long p = closeParenPos - 1;
+
+        while (p >= lineStart && buf[p] != '(')
+            p--;
+
+        if (p >= lineStart && p > lineStart && buf[p - 1] == ']') {
+            long openParenPos = p;
+            long closeBracketPos = openParenPos - 1;
+            long urlStart = openParenPos + 1;
+            long urlLen = closeParenPos - urlStart;
+            long q = closeBracketPos - 1;
+
+            while (q >= lineStart && buf[q] != '[')
+                q--;
+
+            if (q >= lineStart) {
+                long openBracketPos = q;
+                long k;
+
+                if (urlLen < 0) urlLen = 0;
+                if (urlLen > 255) urlLen = 255;
+                e.linkURL[0] = (unsigned char) urlLen;
+                for (k = 0; k < urlLen; k++)
+                    e.linkURL[1 + k] = (unsigned char) buf[urlStart + k];
+
+                e.kind = MD_KIND_LINK;
+                e.del1Start = closeBracketPos; e.del1End = caret;
+                e.del2Start = openBracketPos;  e.del2End = openBracketPos + 1;
+                e.styleStart = openBracketPos; e.styleEnd = closeBracketPos - 1;
+                e.newCaret = closeBracketPos - 1;
+                e.resetNormal = 1;
+                return e;
+            }
+        }
+    }
+
+    return e;
+}

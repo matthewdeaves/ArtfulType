@@ -825,8 +825,8 @@ void DetectInlineMarkdown(char justTyped)
     Handle textH;
     long len;
     long caret;
-    long lineStart;
-    long lineEnd;
+    MdInlineEdit e;
+    TextStyle ts;
 
     if (justTyped == '\r') {
         SetTypingStyleNormal((**gHiddenTE).selEnd);
@@ -837,252 +837,59 @@ void DetectInlineMarkdown(char justTyped)
     len = (**gHiddenTE).teLength;
     caret = (**gHiddenTE).selEnd;
 
+    /* All pattern matching is pure: read the locked buffer once, decide the
+       edit, then unlock before touching the TE (TEDelete/TESetStyle may
+       move memory, so nothing below dereferences textH). */
     HLock(textH);
+    e = MdDetectInline(*textH, len, caret, justTyped);
+    HUnlock(textH);
 
-    lineStart = caret;
-    while (lineStart > 0 && (*textH)[lineStart - 1] != '\r')
-        lineStart--;
+    if (e.kind == MD_INLINE_NONE)
+        return;
 
-    lineEnd = caret;
-    while (lineEnd < len && (*textH)[lineEnd] != '\r')
-        lineEnd++;
-
-    if (justTyped == ' ') {
-        short level = 0;
-        long p = lineStart;
-
-        while (level < 3 && p < caret - 1 && (*textH)[p] == '#') {
-            level++;
-            p++;
-        }
-        if (level > 0 && p == caret - 1) {
-            TextStyle ts;
-
-            HUnlock(textH);
-            TESetSelect((short) lineStart, (short) caret, gHiddenTE);
-            TEDelete(gHiddenTE);
-            TESetSelect((short) lineStart, (short) lineStart, gHiddenTE);
-            ts.tsFace = bold;
-            ts.tsSize = CurrentFontSize() + (4 - level) * 4;
-            TESetStyle(doFace + doSize, &ts, true, gHiddenTE);
-            InvalidateHeightCache();
-            return;
-        }
-    } else if (justTyped == '*') {
-        if (caret >= 4 && (*textH)[caret - 2] == '*' && (*textH)[caret - 1] == '*') {
-            long p = caret - 4;
-
-            while (p >= lineStart) {
-                if ((*textH)[p] == '*' && (*textH)[p + 1] == '*' && p + 2 < caret - 2) {
-                    long innerStart = p + 2;
-                    long innerEnd = caret - 2;
-                    TextStyle ts;
-
-                    HUnlock(textH);
-                    TESetSelect((short) innerEnd, (short) caret, gHiddenTE);
-                    TEDelete(gHiddenTE);
-                    TESetSelect((short) p, (short) innerStart, gHiddenTE);
-                    TEDelete(gHiddenTE);
-
-                    ts.tsFace = bold;
-                    TESetSelect((short) p, (short) (innerEnd - 2), gHiddenTE);
-                    TESetStyle(doFace, &ts, true, gHiddenTE);
-                    SetTypingStyleNormal((short) (innerEnd - 2));
-                    InvalidateHeightCache();
-                    return;
-                }
-                p--;
-            }
-
-            /* No opening ** behind the caret -- the just-typed ** may
-               instead be an OPENING delimiter for a closing ** that's
-               already sitting later in the line (going back to bold
-               text that was typed earlier, closing delimiter first). */
-            {
-                long q = caret + 1;
-
-                while (q + 1 < lineEnd) {
-                    if ((*textH)[q] == '*' && (*textH)[q + 1] == '*') {
-                        long innerEnd = q;
-                        TextStyle ts;
-
-                        HUnlock(textH);
-                        TESetSelect((short) innerEnd, (short) (innerEnd + 2), gHiddenTE);
-                        TEDelete(gHiddenTE);
-                        TESetSelect((short) (caret - 2), (short) caret, gHiddenTE);
-                        TEDelete(gHiddenTE);
-
-                        ts.tsFace = bold;
-                        TESetSelect((short) (caret - 2), (short) (innerEnd - 2), gHiddenTE);
-                        TESetStyle(doFace, &ts, true, gHiddenTE);
-                        SetTypingStyleNormal((short) (caret - 2));
-                        InvalidateHeightCache();
-                        return;
-                    }
-                    q++;
-                }
-            }
-        } else if (caret >= 3 && (*textH)[caret - 2] != '*') {
-            long p = caret - 2;
-
-            while (p >= lineStart) {
-                if ((*textH)[p] == '*' &&
-                    (p == lineStart || (*textH)[p - 1] != '*') &&
-                    (*textH)[p + 1] != '*' && p + 1 < caret - 1) {
-                    long innerStart = p + 1;
-                    long innerEnd = caret - 1;
-                    TextStyle ts;
-
-                    HUnlock(textH);
-                    TESetSelect((short) innerEnd, (short) caret, gHiddenTE);
-                    TEDelete(gHiddenTE);
-                    TESetSelect((short) p, (short) innerStart, gHiddenTE);
-                    TEDelete(gHiddenTE);
-
-                    ts.tsFace = italic;
-                    TESetSelect((short) p, (short) (innerEnd - 1), gHiddenTE);
-                    TESetStyle(doFace, &ts, true, gHiddenTE);
-                    SetTypingStyleNormal((short) (innerEnd - 1));
-                    InvalidateHeightCache();
-                    return;
-                }
-                p--;
-            }
-
-            /* No opening * behind the caret -- the just-typed * may
-               instead be an OPENING italic delimiter for a closing *
-               that's already sitting later in the line. */
-            {
-                long q = caret;
-
-                while (q < lineEnd) {
-                    if ((*textH)[q] == '*' &&
-                        (*textH)[q - 1] != '*' &&
-                        (q + 1 == lineEnd || (*textH)[q + 1] != '*') &&
-                        q > caret) {
-                        long innerEnd = q;
-                        TextStyle ts;
-
-                        HUnlock(textH);
-                        TESetSelect((short) innerEnd, (short) (innerEnd + 1), gHiddenTE);
-                        TEDelete(gHiddenTE);
-                        TESetSelect((short) (caret - 1), (short) caret, gHiddenTE);
-                        TEDelete(gHiddenTE);
-
-                        ts.tsFace = italic;
-                        TESetSelect((short) (caret - 1), (short) (innerEnd - 1), gHiddenTE);
-                        TESetStyle(doFace, &ts, true, gHiddenTE);
-                        SetTypingStyleNormal((short) (caret - 1));
-                        InvalidateHeightCache();
-                        return;
-                    }
-                    q++;
-                }
-            }
-        }
-    } else if (justTyped == '`') {
-        long p = caret - 2;
-
-        while (p >= lineStart) {
-            if ((*textH)[p] == '`' && p + 1 < caret - 1) {
-                long innerStart = p + 1;
-                long innerEnd = caret - 1;
-                TextStyle ts;
-
-                HUnlock(textH);
-                TESetSelect((short) innerEnd, (short) caret, gHiddenTE);
-                TEDelete(gHiddenTE);
-                TESetSelect((short) p, (short) innerStart, gHiddenTE);
-                TEDelete(gHiddenTE);
-
-                GetFNum("\pMonaco", &ts.tsFont);
-                TESetSelect((short) p, (short) (innerEnd - 1), gHiddenTE);
-                TESetStyle(doFont, &ts, true, gHiddenTE);
-                SetTypingStyleNormal((short) (innerEnd - 1));
-                InvalidateHeightCache();
-                return;
-            }
-            p--;
-        }
-
-        /* No opening ` behind the caret -- the just-typed ` may instead
-           be an OPENING code delimiter for a closing ` already sitting
-           later in the line. */
-        {
-            long q = caret;
-
-            while (q < lineEnd) {
-                if ((*textH)[q] == '`' && q > caret) {
-                    long innerEnd = q;
-                    TextStyle ts;
-
-                    HUnlock(textH);
-                    TESetSelect((short) innerEnd, (short) (innerEnd + 1), gHiddenTE);
-                    TEDelete(gHiddenTE);
-                    TESetSelect((short) (caret - 1), (short) caret, gHiddenTE);
-                    TEDelete(gHiddenTE);
-
-                    GetFNum("\pMonaco", &ts.tsFont);
-                    TESetSelect((short) (caret - 1), (short) (innerEnd - 1), gHiddenTE);
-                    TESetStyle(doFont, &ts, true, gHiddenTE);
-                    SetTypingStyleNormal((short) (caret - 1));
-                    InvalidateHeightCache();
-                    return;
-                }
-                q++;
-            }
-        }
-    } else if (justTyped == ')') {
-        long closeParenPos = caret - 1;
-        long p = closeParenPos - 1;
-
-        while (p >= lineStart && (*textH)[p] != '(')
-            p--;
-
-        if (p >= lineStart && p > lineStart && (*textH)[p - 1] == ']') {
-            long openParenPos = p;
-            long closeBracketPos = openParenPos - 1;
-            long urlStart = openParenPos + 1;
-            long urlLen = closeParenPos - urlStart;
-            long q = closeBracketPos - 1;
-
-            while (q >= lineStart && (*textH)[q] != '[')
-                q--;
-
-            if (q >= lineStart) {
-                long openBracketPos = q;
-                Str255 url;
-                short linkID;
-                TextStyle ts;
-
-                if (urlLen < 0) urlLen = 0;
-                if (urlLen > 255) urlLen = 255;
-                url[0] = (unsigned char) urlLen;
-                BlockMove(*textH + urlStart, url + 1, urlLen);
-
-                HUnlock(textH);
-
-                TESetSelect((short) closeBracketPos, (short) caret, gHiddenTE);
-                TEDelete(gHiddenTE);
-                TESetSelect((short) openBracketPos, (short) (openBracketPos + 1), gHiddenTE);
-                TEDelete(gHiddenTE);
-
-                linkID = AddLinkURL(url);
-
-                ts.tsFace = underline;
-                ts.tsColor.red = linkID;
-                ts.tsColor.green = 0;
-                ts.tsColor.blue = 0;
-                TESetSelect((short) openBracketPos, (short) (closeBracketPos - 1), gHiddenTE);
-                TESetStyle(doFace + doColor, &ts, true, gHiddenTE);
-                SetTypingStyleNormal((short) (closeBracketPos - 1));
-                InvalidateHeightCache();
-                return;
-            }
-        }
+    /* del1 is the higher-positioned range, so deleting it first leaves
+       del2's and the style range's coordinates valid. */
+    if (e.del1End > e.del1Start) {
+        TESetSelect((short) e.del1Start, (short) e.del1End, gHiddenTE);
+        TEDelete(gHiddenTE);
+    }
+    if (e.del2End > e.del2Start) {
+        TESetSelect((short) e.del2Start, (short) e.del2End, gHiddenTE);
+        TEDelete(gHiddenTE);
     }
 
-    HUnlock(textH);
+    TESetSelect((short) e.styleStart, (short) e.styleEnd, gHiddenTE);
+    switch (e.kind) {
+    case MD_KIND_HEADING:
+        ts.tsFace = bold;
+        ts.tsSize = CurrentFontSize() + (4 - e.level) * 4;
+        TESetStyle(doFace + doSize, &ts, true, gHiddenTE);
+        break;
+    case MD_KIND_BOLD:
+        ts.tsFace = bold;
+        TESetStyle(doFace, &ts, true, gHiddenTE);
+        break;
+    case MD_KIND_ITALIC:
+        ts.tsFace = italic;
+        TESetStyle(doFace, &ts, true, gHiddenTE);
+        break;
+    case MD_KIND_CODE:
+        GetFNum("\pMonaco", &ts.tsFont);
+        TESetStyle(doFont, &ts, true, gHiddenTE);
+        break;
+    case MD_KIND_LINK:
+        ts.tsFace = underline;
+        ts.tsColor.red = AddLinkURL(e.linkURL);
+        ts.tsColor.green = 0;
+        ts.tsColor.blue = 0;
+        TESetStyle(doFace + doColor, &ts, true, gHiddenTE);
+        break;
+    }
+
+    if (e.resetNormal)
+        SetTypingStyleNormal((short) e.newCaret);
+
+    InvalidateHeightCache();
 }
 
 /* "None" in Writer mode: just clear the applied style on the selection. */
