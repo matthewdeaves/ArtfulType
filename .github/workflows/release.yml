@@ -6,10 +6,17 @@
 # bootable images are formatted and *blessed* in software (see
 # build-boot-images.sh and tools/bless_hfs.py), so no Mac is involved.
 #
+# Two runner environments are used deliberately:
+#   * build-app runs in the Retro68 container, which is the only place the
+#     m68k cross-toolchain lives.
+#   * build-disks runs on a native ubuntu-latest runner. The disk tooling
+#     (hfsutils via apt, plus djjr) works there, whereas djjr's runtime
+#     traps (SIGILL) against the Retro68 container's older system libraries.
+#
 # Published assets:
 #   ArtfulType.bin          the application itself (MacBinary).
-#   ArtfulType-800K.image   bootable 800K floppy (System 6.0.8 + app), for
-#                           Mini vMac or a real floppy.
+#   ArtfulType-800K.dsk     bootable 800K floppy, raw HFS (System 6.0.8 + app).
+#   ArtfulType-800K.image   the same floppy in DiskCopy 4.2 format.
 #   ArtfulType-20MB.dsk     bootable 20 MB volume, for Mini vMac.
 #   HD1_ArtfulType.hda      bootable 20 MB BlueSCSI/PiSCSI device image.
 #   START_HERE.md           the getting-started guide.
@@ -30,38 +37,48 @@ env:
   DJJR_URL: https://diskjockey.onegeekarmy.eu/files/djjr/djjr-linux-x86_64.tar.gz
 
 jobs:
-  build:
-    name: Build app + bootable images
+  build-app:
+    name: Build the 68k application
     runs-on: ubuntu-latest
-    # Official Retro68 image: ships the multiversal interfaces, the m68k
-    # toolchain, and the hfsutils (hformat/hmount/hcopy) used below.
+    # Official Retro68 image: the only environment with the m68k toolchain.
     container: ghcr.io/autc04/retro68
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build the 68k application
+      - name: Build ArtfulType.bin
         run: |
           cmake -S app -B app/build \
             -DCMAKE_TOOLCHAIN_FILE=/Retro68-build/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake
           cmake --build app/build
           test -f app/build/ArtfulType.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-binary
+          path: app/build/ArtfulType.bin
 
-      - name: Install djjr (BlueSCSI device-image tool)
+  build-disks:
+    name: Build bootable disk images
+    needs: build-app
+    runs-on: ubuntu-latest        # native runner: hfsutils + djjr both work here
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-binary
+          path: app/build
+
+      - name: Install hfsutils + djjr
         run: |
           set -eu
+          sudo apt-get update && sudo apt-get install -y hfsutils
           curl -fsSL -o /tmp/djjr.tgz "$DJJR_URL"
-          tar -xzf /tmp/djjr.tgz -C /usr/local/bin djjr
-          chmod +x /usr/local/bin/djjr
-          djjr --version || true
+          sudo tar -xzf /tmp/djjr.tgz -C /usr/local/bin djjr
+          sudo chmod +x /usr/local/bin/djjr
+          djjr --version
 
       - name: Build the bootable disk images
         run: |
           set -eu
-          export PATH="/Retro68-build/toolchain/bin:$PATH"
-          command -v hformat >/dev/null 2>&1 || { apt-get update && apt-get install -y hfsutils; }
-          command -v python3 >/dev/null 2>&1 || { apt-get update && apt-get install -y python3; }
           ./build-boot-images.sh
-          # Ship the raw application binary alongside the disk images.
           cp app/build/ArtfulType.bin dist/ArtfulType.bin
           ls -l dist
 
@@ -72,7 +89,7 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: build
+    needs: build-disks
     runs-on: ubuntu-latest
     # Only publish for real tag pushes. A workflow_dispatch run (branch ref)
     # builds and uploads the artifact but stops here -- a genuine dry run.
@@ -95,7 +112,7 @@ jobs:
             **Ready-to-run disk images** (all boot System 6.0.8 with ArtfulType):
             - `HD1_ArtfulType.hda` — bootable BlueSCSI/PiSCSI device image for real hardware. The `HD1_` prefix matches BlueSCSI's SCSI-ID-1 convention, so drop it on the SD card as-is.
             - `ArtfulType-20MB.dsk` — bootable 20 MB volume for Mini vMac.
-            - `ArtfulType-800K.image` — bootable 800K floppy (DiskCopy 4.2) for Mini vMac or a real floppy.
+            - `ArtfulType-800K.dsk` / `ArtfulType-800K.image` — bootable 800K floppy (raw HFS, and the DiskCopy 4.2 form) for Mini vMac, a flux floppy writer, or Disk Copy 4.2.
 
             **Also attached:**
             - `ArtfulType.bin` — the application on its own (MacBinary), to add to an existing System volume.
