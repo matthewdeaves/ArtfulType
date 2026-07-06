@@ -13,6 +13,8 @@ A distraction-free Markdown writing app for classic 68k Macintosh computers (Sys
 - Adjustable zoom, remembered between launches
 - Save/Open plain Markdown files via the classic File Manager
 
+Video overview: [Artful Type demo](https://youtu.be/HEheu_r9UGw)
+
 ## Getting Started
 
 If your Mac can use [BlueSCSI](https://bluescsi.com), use the BlueSCSI image. If it can't (or you just want a physical floppy), use the 800K floppy image instead.
