@@ -82,6 +82,29 @@ static void MakeMenu(void)
     CheckItem(gViewMenu, iWriterView, true);
 
     DrawMenuBar();
+
+    /*
+        Drop the Help ("?") menu for a cleaner, distraction-free bar. On
+        System 7 the Menu Manager's MBDF auto-inserts up to three system menus
+        at the right -- the Application (switcher) menu, the Help menu, and,
+        only when more than one script system is installed, a Keyboard menu.
+        The first DrawMenuBar above is what makes the MBDF's "calc" routine add
+        them (it does so whenever an Apple menu is present and no system menus
+        are yet in the list). DeleteMenu then removes the Help menu; the second
+        DrawMenuBar repaints without it. It stays gone because the Application
+        menu -- which Inside Macintosh VI says is "always displayed" and cannot
+        be removed -- keeps a system menu present, so "calc" never re-adds the
+        full set. We deliberately keep the Application menu (the user wants the
+        switcher) and the Apple menu. DeleteMenu/DrawMenuBar are original traps,
+        safe on every target; gate on System 7 only because System 6 has no Help
+        menu to remove (see HasSystem7). The menu-bar clock (System 7.5+) is not
+        a menu -- it is redrawn on a timer by the Date & Time control panel and
+        has no Toolbox off-switch, so it can only be turned off there.
+    */
+    if (HasSystem7()) {
+        DeleteMenu(kHMHelpMenuID);
+        DrawMenuBar();
+    }
 }
 
 static void MakeWindow(void)

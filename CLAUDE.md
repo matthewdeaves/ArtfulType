@@ -110,6 +110,22 @@ mdcore, and maps spans onto real `TextStyle` runs.
   through a DA's window. All of this is a no-op on the System 7 targets where DAs
   live in their own layer. See `main.c`.
 
+- **The right side of the menu bar belongs to the system.** On System 7 the Menu
+  Manager auto-inserts up to three system menus at the right: the Application
+  (switcher) menu, the Help (`?`) menu, and — only when more than one script
+  system is installed — a Keyboard menu. The **Application menu is *always
+  displayed* and cannot be removed** (Inside Macintosh VI, "With the System
+  Menus"). The Help/Keyboard icons *can* be dropped: after the bar is first drawn
+  (the `DrawMenuBar` in `MakeMenu` is what makes the MBDF's *calc* routine insert
+  them), `DeleteMenu(kHMHelpMenuID)` + a second `DrawMenuBar` removes the Help
+  menu, and it stays gone because the ever-present Application menu keeps *calc*
+  from re-adding the full set (it only re-adds when *no* system menus remain).
+  Gate on `HasSystem7()` — System 6 has no Help menu to remove. The **System 7.5+
+  menu-bar clock is *not* a menu**: it's redrawn on a timer by the Date & Time
+  control panel (the folded-in SuperClock) and has no Toolbox off-switch, so it
+  can only be turned off there — an app cannot hide just the clock without hiding
+  the whole bar. See `MakeMenu` in `main.c`.
+
 - **Modal text dialogs need a filter proc.** `ModalDialog(NULL, …)` gives no
   Return-confirms / Escape-cancels. The link dialog installs a `ModalFilterUPP`
   and `SetDialogDefaultItem` for the OK outline (`markdown.c`). `pascal` callbacks
