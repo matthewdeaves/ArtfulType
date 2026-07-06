@@ -75,9 +75,17 @@ void UpdateMenuBarLook(void)
 
 static void MakeMenu(void)
 {
+    MenuHandle appleMenu;
     MenuHandle fileMenu;
     MenuHandle styleMenu;
-    MenuHandle helpMenu;
+
+    /* Inserted first so it sits leftmost. "\024" is the apple glyph in the
+       system font. AppendResMenu('DRVR') fills in the installed desk
+       accessories below the About item, the standard Apple-menu contents. */
+    appleMenu = NewMenu(mApple, "\p\024");
+    AppendMenu(appleMenu, "\pAbout The Artful Type...;(-");
+    AppendResMenu(appleMenu, 'DRVR');
+    InsertMenu(appleMenu, 0);
 
     fileMenu = NewMenu(mFile, "\pFile");
     AppendMenu(fileMenu, "\pNew/N;Open.../O;Save/S;Save As...;(-;Quit/Q");
@@ -101,10 +109,6 @@ static void MakeMenu(void)
     AppendMenu(gViewMenu, "\pMarkdown;Writer;(-;Zoom In/=;Zoom Out/-;Default Size/0");
     InsertMenu(gViewMenu, 0);
     CheckItem(gViewMenu, iWriterView, true);
-
-    helpMenu = NewMenu(mHelp, "\pHelp");
-    AppendMenu(helpMenu, "\pAbout The Artful Type...");
-    InsertMenu(helpMenu, 0);
 
     UpdateMenuBarLook();
 }
@@ -160,7 +164,17 @@ static void DoMenuCommand(long menuResult)
     short menuID = HiWord(menuResult);
     short menuItem = LoWord(menuResult);
 
-    if (menuID == mFile) {
+    if (menuID == mApple) {
+        if (menuItem == iAbout) {
+            ShowAboutBox();
+        } else {
+            /* Any other Apple-menu item is a desk accessory: hand its
+               name to the system to open it. */
+            Str255 daName;
+            GetMenuItemText(GetMenuHandle(mApple), menuItem, daName);
+            OpenDeskAcc(daName);
+        }
+    } else if (menuID == mFile) {
         switch (menuItem) {
             case iNew:
                 if (ConfirmDiscardChanges())
@@ -178,13 +192,30 @@ static void DoMenuCommand(long menuResult)
                 break;
         }
     } else if (menuID == mEdit) {
-        switch (menuItem) {
-            case iUndo:      DoUndo(); break;
-            case iRedo:      DoRedo(); break;
-            case iCut:       DoCut(); break;
-            case iCopy:      DoCopy(); break;
-            case iPaste:     DoPaste(); break;
-            case iSelectAll: DoSelectAll(); break;
+        /* If a desk accessory is frontmost, give it first refusal on the
+           standard editing commands (it acts on its own selection). Our
+           Edit menu is non-standard, so map items to editCmd explicitly;
+           Redo and Select All have no SystemEdit equivalent. */
+        short editCmd = -1;
+
+        if (FrontWindow() != gWindow) {
+            switch (menuItem) {
+                case iUndo:  editCmd = undoCmd;  break;
+                case iCut:   editCmd = cutCmd;   break;
+                case iCopy:  editCmd = copyCmd;  break;
+                case iPaste: editCmd = pasteCmd; break;
+            }
+        }
+
+        if (editCmd < 0 || !SystemEdit(editCmd)) {
+            switch (menuItem) {
+                case iUndo:      DoUndo(); break;
+                case iRedo:      DoRedo(); break;
+                case iCut:       DoCut(); break;
+                case iCopy:      DoCopy(); break;
+                case iPaste:     DoPaste(); break;
+                case iSelectAll: DoSelectAll(); break;
+            }
         }
     } else if (menuID == mStyle) {
         gDirty = true;
@@ -225,16 +256,28 @@ static void DoMenuCommand(long menuResult)
             case iZoomOut:      DoZoom(-1); break;
             case iZoomDefault:  DoZoomReset(); break;
         }
-    } else if (menuID == mHelp) {
-        switch (menuItem) {
-            case iAbout: ShowAboutBox(); break;
-        }
     }
     HiliteMenu(0);
     /* HiliteMenu un-hilites the clicked title assuming the Menu Manager's
        own standard white-bar/black-text look, which clobbers our inverted
        Writer-mode bar -- reassert it now that the menu has closed. */
     UpdateMenuBarLook();
+}
+
+/*
+    Bring the document window's TextEdit and scrollbar into the active or
+    inactive look together. Shared by activate events (clicking between our
+    window and a desk accessory) and MultiFinder suspend/resume, so a
+    backgrounded app dims its scrollbar and drops its caret exactly as it
+    would when a DA comes forward.
+*/
+static void SetWindowActive(Boolean active)
+{
+    if (active)
+        TEActivate(gActiveTE);
+    else
+        TEDeactivate(gActiveTE);
+    HiliteControl(gScrollBar, active ? 0 : 255);
 }
 
 static void EventLoop(void)
@@ -251,7 +294,10 @@ static void EventLoop(void)
             SetPort(gWindow);
             switch (event.what) {
                 case updateEvt:
-                    DoUpdate((WindowPtr) event.message);
+                    /* Only our own window's updates are ours to paint; a
+                       desk accessory redraws its own window. */
+                    if ((WindowPtr) event.message == gWindow)
+                        DoUpdate(gWindow);
                     break;
 
                 case mouseDown:
@@ -259,23 +305,37 @@ static void EventLoop(void)
                     if (part == inMenuBar) {
                         UpdateEditMenuState();
                         DoMenuCommand(MenuSelect(event.where));
+                    } else if (part == inSysWindow) {
+                        /* A click in a desk accessory's window -- let the
+                           system route it to the DA. */
+                        SystemClick(&event, w);
                     } else if (part == inContent) {
-                        ControlHandle hitControl;
+                        if (w != FrontWindow()) {
+                            /* Our window is behind a desk accessory: a click
+                               brings it forward rather than editing through
+                               the DA. */
+                            SelectWindow(w);
+                        } else {
+                            ControlHandle hitControl;
 
-                        SetPort(w);
-                        GlobalToLocal(&event.where);
-                        if (FindControl(event.where, w, &hitControl) != 0 && hitControl == gScrollBar)
-                            DoScrollClick(event.where);
-                        else {
-                            gTypingRunActive = false;
-                            TEClick(event.where, (event.modifiers & shiftKey) != 0, gActiveTE);
+                            SetPort(w);
+                            GlobalToLocal(&event.where);
+                            if (FindControl(event.where, w, &hitControl) != 0 && hitControl == gScrollBar)
+                                DoScrollClick(event.where);
+                            else {
+                                gTypingRunActive = false;
+                                TEClick(event.where, (event.modifiers & shiftKey) != 0, gActiveTE);
+                            }
                         }
                     }
                     break;
 
                 case keyDown:
                 case autoKey: {
-                    char key = event.message & charCodeMask;
+                    /* Unsigned: high-bit characters (option-accented letters,
+                       etc.) must stay 0x80..0xFF, not sign-extend to negative
+                       and read as control keys below. */
+                    unsigned char key = event.message & charCodeMask;
                     Boolean isContentKey = (key < 0x1C || key > 0x1F);
 
                     if (event.modifiers & cmdKey) {
@@ -287,6 +347,9 @@ static void EventLoop(void)
                                 DoMenuCommand(MenuKey(key));
                             }
                         }
+                    } else if (FrontWindow() != gWindow) {
+                        /* A desk accessory is frontmost: it handles its own
+                           typing; we must not consume the key into our TE. */
                     } else if (isContentKey && key != kBackspaceKey &&
                                !DocCanGrowBy(gActiveTE, 1)) {
                         /* At the document-size cap: refuse further inserted
@@ -316,10 +379,20 @@ static void EventLoop(void)
                 }
 
                 case activateEvt:
-                    if ((event.modifiers & activeFlag) != 0)
-                        TEActivate(gActiveTE);
-                    else
-                        TEDeactivate(gActiveTE);
+                    /* Only our own window's activation drives our TE and
+                       scrollbar; a DA window's activate events are its own. */
+                    if ((WindowPtr) event.message == gWindow)
+                        SetWindowActive((event.modifiers & activeFlag) != 0);
+                    break;
+
+                case osEvt:
+                    /* MultiFinder suspend/resume. The message's high byte
+                       tags it; bit 0 (RESUME) distinguishes resume from
+                       suspend. Handled the same as activate/deactivate so
+                       the caret and scrollbar track foreground state. */
+                    if (((unsigned long) event.message & 0xFF000000UL) ==
+                            SUSPENDRESUMEBITS)
+                        SetWindowActive((event.message & RESUME) != 0);
                     break;
             }
         }

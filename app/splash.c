@@ -129,7 +129,7 @@ void ShowSplashScreen(void)
     }
 }
 
-/* Help -> About: same branding dialog as the startup splash, but with
+/* Apple -> About: same branding dialog as the startup splash, but with
    a single OK button instead of New/Open, since this is shown during
    active editing rather than at startup. */
 void ShowAboutBox(void)
