@@ -49,13 +49,6 @@ mdcore, and maps spans onto real `TextStyle` runs.
   charCodeMask` for an option-accented character is ≥ 0x80 and sign-extends to
   negative, misclassifying as a control key. See the `keyDown` handler in `main.c`.
 
-- **The Writer-mode menu bar is hand-inverted.** There's no Menu Manager API for a
-  black menu bar on System 6/7, so `UpdateMenuBarLook` draws the normal bar then
-  XOR-inverts it on the **Window Manager port**. Anything that lets the Menu
-  Manager repaint the bar — `HiliteMenu(0)` after a menu pick, an alert, a
-  StandardFile call — clobbers the inversion, so call `UpdateMenuBarLook()` again
-  afterward. That's why it's sprinkled after dialogs.
-
 - **Restore the port.** Disposing a dialog/window doesn't restore the caller's
   `thePort`; the event loop defensively `SetPort(gWindow)` each pass, and dialog
   helpers do it explicitly. Leaving `thePort` at freed memory is a latent crash.

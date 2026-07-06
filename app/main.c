@@ -44,35 +44,6 @@ static void Init(void)
     InitCursor();
 }
 
-/*
-    Writer mode gets a black menu bar with white text; Markdown mode gets
-    the standard look. There's no Menu Manager API for this on classic Mac
-    OS (that's a much later Appearance Manager concept) -- on a 1-bit
-    display, drawing the normal bar and then XOR-inverting that strip
-    achieves the same thing trivially. Must target the Window Manager
-    port (global screen coordinates), not whatever window's port happens
-    to be current, since the menu bar isn't part of any window.
-*/
-void UpdateMenuBarLook(void)
-{
-    GrafPtr savePort;
-    GrafPtr wMgrPort;
-    Rect bar;
-
-    DrawMenuBar();
-
-    if (gHideMarkdown) {
-        GetPort(&savePort);
-        GetWMgrPort(&wMgrPort);
-        SetPort(wMgrPort);
-
-        SetRect(&bar, 0, 0, qd.screenBits.bounds.right, MENU_BAR_HEIGHT);
-        InvertRect(&bar);
-
-        SetPort(savePort);
-    }
-}
-
 static void MakeMenu(void)
 {
     MenuHandle appleMenu;
@@ -110,7 +81,7 @@ static void MakeMenu(void)
     InsertMenu(gViewMenu, 0);
     CheckItem(gViewMenu, iWriterView, true);
 
-    UpdateMenuBarLook();
+    DrawMenuBar();
 }
 
 static void MakeWindow(void)
@@ -258,10 +229,6 @@ static void DoMenuCommand(long menuResult)
         }
     }
     HiliteMenu(0);
-    /* HiliteMenu un-hilites the clicked title assuming the Menu Manager's
-       own standard white-bar/black-text look, which clobbers our inverted
-       Writer-mode bar -- reassert it now that the menu has closed. */
-    UpdateMenuBarLook();
 }
 
 /*

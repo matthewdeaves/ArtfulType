@@ -898,7 +898,6 @@ static Boolean ShowLinkURLDialog(unsigned char *url)
 
     DisposeDialog(dlg);
     SetPort(gWindow);
-    UpdateMenuBarLook();
     return result;
 }
 

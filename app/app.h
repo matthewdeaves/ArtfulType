@@ -177,7 +177,6 @@ extern Str255 gLinkURLs[MAX_LINKS + 1];
 extern short gLinkCount;
 
 /* main.c */
-void UpdateMenuBarLook(void);
 Boolean HasSystem7(void);
 
 /* scrolling.c */
