@@ -1,6 +1,33 @@
 #include "Finder.r"
 #include "Dialogs.r"
 
+/* MultiFinder/System 7 sizing and cooperation flags. acceptSuspendResume
+   lets the app dim/undim as it moves between foreground and background
+   (see the osEvt handler in main.c). Marked notHighLevelEventAware on
+   purpose: document opening uses the classic CountAppFiles mechanism, not
+   Apple Events, so the Finder must fall back to that rather than sending
+   an unanswered 'odoc'. */
+resource 'SIZE' (-1) {
+    reserved,
+    acceptSuspendResumeEvents,
+    reserved,
+    canBackground,
+    doesActivateOnFGSwitch,
+    backgroundAndForeground,
+    dontGetFrontClicks,
+    ignoreChildDiedEvents,
+    is32BitCompatible,
+    notHighLevelEventAware,
+    onlyLocalHLEvents,
+    notStationeryAware,
+    dontUseTextEditServices,
+    reserved,
+    reserved,
+    reserved,
+    2048 * 1024,
+    1024 * 1024
+};
+
 resource 'DITL' (130) {
     {
         {80, 204, 100, 284}, Button { enabled, "Save" },
@@ -20,10 +47,6 @@ resource 'ALRT' (130) {
         OK, visible, sound1
     },
     alertPositionMainScreen
-};
-
-data 'ZLvl' (128) {
-    $"0002"
 };
 
 resource 'DITL' (131) {
@@ -81,6 +104,25 @@ resource 'DLOG' (133) {
     133,
     "",
     noAutoCenter
+};
+
+resource 'DITL' (134) {
+    {
+        {80, 210, 100, 290}, Button { enabled, "OK" },
+        {12, 20, 68, 290}, StaticText { disabled, "^0" }
+    }
+};
+
+resource 'ALRT' (134) {
+    {100, 100, 220, 400},
+    134,
+    {
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1
+    },
+    alertPositionMainScreen
 };
 
 resource 'ICN#' (128) {

@@ -19,7 +19,7 @@ static const unsigned char kSplashImageBits[kSplashImageHeight * kSplashImageRow
 };
 
 /* Bump this on every release. */
-static const unsigned char kVersionString[] = "\pv0.1.2-alpha";
+static const unsigned char kVersionString[] = "\pv0.1.3-alpha";
 static const unsigned char kGitHubURL[] = "\pgithub.com/ActionRetro";
 
 static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
@@ -122,14 +122,13 @@ void ShowSplashScreen(void)
 
         DisposeDialog(dlg);
         SetPort(gWindow);
-        UpdateMenuBarLook();
 
         /* Open Document, then Cancel in the file picker -- show the splash again */
         done = (item == iSplashNew) || DoOpenFile();
     }
 }
 
-/* Help -> About: same branding dialog as the startup splash, but with
+/* Apple -> About: same branding dialog as the startup splash, but with
    a single OK button instead of New/Open, since this is shown during
    active editing rather than at startup. */
 void ShowAboutBox(void)
@@ -155,5 +154,4 @@ void ShowAboutBox(void)
 
     DisposeDialog(dlg);
     SetPort(gWindow);
-    UpdateMenuBarLook();
 }

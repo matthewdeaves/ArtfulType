@@ -16,6 +16,7 @@
 #include <SegLoad.h>
 #include <Multiverse.h>
 #include <string.h>
+#include "mdcore.h"
 
 #define MARGIN_H     64
 #define MARGIN_TOP   32
@@ -23,6 +24,10 @@
 #define MENU_BAR_HEIGHT 20
 #define FONT_SIZE 18
 #define SCROLLBAR_WIDTH 16
+#define kBackspaceKey 0x08
+#define kReturnKey    0x0D
+#define kEnterKey     0x03
+#define kEscapeKey    0x1B
 
 #define mFile    128
 #define iNew     1
@@ -69,6 +74,8 @@
 #define iAboutOK     1
 #define iAboutTitle  2
 
+#define kErrorAlert  134
+
 #define mView        130
 #define iMarkdownView 1
 #define iWriterView  2
@@ -76,10 +83,35 @@
 #define iZoomOut     5
 #define iZoomDefault 6
 
-#define mHelp    132
+/* The Apple menu (id 1, drawn leftmost) carries About + the desk
+   accessories. About lives here, its conventional classic-Mac home,
+   rather than in a separate Help menu. */
+#define mApple   1
 #define iAbout   1
 
-#define MAX_STYLE_OPS 512
+/* System 7's Menu Manager auto-inserts a Help ("?") system menu at the right
+   end of the bar. This is its well-known menu ID; we DeleteMenu it for a
+   cleaner, distraction-free bar (see MakeMenu). Not defined by the multiversal
+   headers, so it lives here. */
+#define kHMHelpMenuID (-16490)
+
+/* The pure core (mdcore.h) owns these caps; alias the app-side names to
+   the single source of truth so the two never drift apart. */
+#define MAX_STYLE_OPS MD_MAX_SPANS
+
+/*
+    The active document is bounded to this many characters. TextEdit's hard
+    limit is 32767 bytes and TEInsert does not enforce it -- the caller must
+    (Inside Macintosh -- Text, Listing 2-8: kMaxTELength). This bound is on
+    the *visible* buffer; switching to Markdown mode re-adds delimiter
+    characters (#, **, `, [](), ...), so the canonical text is somewhat
+    longer. 20000 leaves generous headroom for that delimiter overhead so a
+    realistic prose document stays within TextEdit's limit through a save or
+    mode-switch round-trip. (A pathologically over-styled document -- many
+    thousands of single-character styled runs -- is not fully covered; noted
+    as a known limitation.)
+*/
+#define kMaxTELength 20000L
 
 #define kNumZoomLevels 5
 #define kZoomBaselineIndex 2
@@ -122,7 +154,7 @@ typedef struct {
     (gLinkCount = 0) at the start of every BuildHiddenView, since that's
     a full reparse of gTE and re-derives whichever links currently exist.
 */
-#define MAX_LINKS 64
+#define MAX_LINKS MD_MAX_LINKS
 
 /* Global state -- actual storage lives in main.c */
 extern WindowPtr gWindow;
@@ -151,7 +183,7 @@ extern Str255 gLinkURLs[MAX_LINKS + 1];
 extern short gLinkCount;
 
 /* main.c */
-void UpdateMenuBarLook(void);
+Boolean HasSystem7(void);
 
 /* scrolling.c */
 void UpdateScrollbarRange(void);
@@ -198,6 +230,8 @@ void DoZoom(short direction);
 void DoZoomReset(void);
 
 /* file.c */
+void ShowError(StringPtr msg);
+Boolean DocCanGrowBy(TEHandle te, long addLen);
 void SetViewMode(Boolean hideMarkdown);
 void DoStartupOpen(void);
 Boolean DoSaveAs(void);

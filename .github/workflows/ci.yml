@@ -1,0 +1,77 @@
+# Continuous integration for ArtfulType.
+#
+# Three independent gates run on every pull request (and on pushes to
+# master), matching the three ways the code is validated locally:
+#
+#   host-tests  -- the portable mdcore engine, unit-tested on a native
+#                  compiler in milliseconds (tests/, `make -C tests check`).
+#   cppcheck    -- static analysis of the app sources, with the one known
+#                  false positive suppressed inline and explained at its
+#                  call site (see app/markdown.c, DoLinkHidden).
+#   build-68k   -- a real cross-compile of the shipping 68k application in
+#                  the official Retro68 toolchain container, proving the
+#                  Mac side still links, not just the pure core.
+#
+# The three are separate jobs so a failure points straight at the layer
+# that broke: the logic, the linter, or the Toolbox build.
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # cc is preinstalled on ubuntu-latest; the tests need nothing else.
+      - name: Build and run host tests
+        run: make -C tests check
+
+  cppcheck:
+    name: Static analysis (cppcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+      # --error-exitcode=1 makes any finding fail the build. Toolbox system
+      # headers aren't present here, so missingInclude(System) are suppressed
+      # wholesale (they're noise, not defects). --inline-suppr honours the
+      # single documented `cppcheck-suppress` in the sources. Any NEW warning
+      # a future cppcheck version reports will fail here on purpose -- triage
+      # it (fix, or suppress inline with a rationale), don't widen this list.
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=warning,performance,portability \
+                   --inline-suppr \
+                   --suppress=missingIncludeSystem \
+                   --suppress=missingInclude \
+                   --error-exitcode=1 \
+                   -I app app/*.c
+
+  build-68k:
+    name: 68k application build
+    runs-on: ubuntu-latest
+    # Official Retro68 image, rebuilt whenever Retro68 master moves. Public,
+    # so no registry login is needed. Ships the multiversal interfaces and
+    # the m68k toolchain file referenced below.
+    container: ghcr.io/autc04/retro68
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          cmake -S app -B app/build \
+            -DCMAKE_TOOLCHAIN_FILE=/Retro68-build/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake
+      - name: Build
+        run: cmake --build app/build
+      # deploy.sh copies app/build/ArtfulType.bin onto the disk images, so a
+      # missing .bin means a broken release even if the compile "succeeded".
+      - name: Verify the application artifact was produced
+        run: |
+          ls -l app/build
+          test -f app/build/ArtfulType.bin

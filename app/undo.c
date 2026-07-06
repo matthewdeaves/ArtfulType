@@ -49,6 +49,8 @@ void PushUndoSnapshot(void)
 
     len = (**gTE).teLength;
     textH = NewHandle(len);
+    if (textH == NULL)
+        return;
     HLock(textH);
     HLock((**gTE).hText);
     BlockMove(*(**gTE).hText, *textH, len);
@@ -89,6 +91,8 @@ static void PushRedoSnapshot(void)
 
     len = (**gTE).teLength;
     textH = NewHandle(len);
+    if (textH == NULL)
+        return;
     HLock(textH);
     HLock((**gTE).hText);
     BlockMove(*(**gTE).hText, *textH, len);
@@ -194,12 +198,16 @@ void DoCut(void)
 
         selLen = selEnd - selStart;
         scrapText = NewHandle(selLen);
-        HLock(textH);
-        HLock(scrapText);
-        BlockMove(*textH + selStart, *scrapText, selLen);
-        HUnlock(textH);
-        HUnlock(scrapText);
+        if (scrapText != NULL) {
+            HLock(textH);
+            HLock(scrapText);
+            BlockMove(*textH + selStart, *scrapText, selLen);
+            HUnlock(textH);
+            HUnlock(scrapText);
+        }
     }
+    if (scrapText == NULL)
+        return;
 
     PushUndoSnapshot();
 
@@ -234,12 +242,16 @@ void DoCopy(void)
 
         selLen = selEnd - selStart;
         scrapText = NewHandle(selLen);
-        HLock(textH);
-        HLock(scrapText);
-        BlockMove(*textH + selStart, *scrapText, selLen);
-        HUnlock(textH);
-        HUnlock(scrapText);
+        if (scrapText != NULL) {
+            HLock(textH);
+            HLock(scrapText);
+            BlockMove(*textH + selStart, *scrapText, selLen);
+            HUnlock(textH);
+            HUnlock(scrapText);
+        }
     }
+    if (scrapText == NULL)
+        return;
 
     ZeroScrap();
     HLock(scrapText);
@@ -255,9 +267,17 @@ void DoPaste(void)
     long len;
 
     scrapH = NewHandle(0);
+    if (scrapH == NULL)
+        return;
     len = GetScrap(scrapH, 'TEXT', &offset);
     if (len <= 0) {
         DisposeHandle(scrapH);
+        return;
+    }
+
+    if (!DocCanGrowBy(gActiveTE, len)) {
+        DisposeHandle(scrapH);
+        ShowError("\pThere isn't room to paste this much text.");
         return;
     }
 

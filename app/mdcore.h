@@ -1,0 +1,154 @@
+/*
+    mdcore -- the pure, Toolbox-free markdown engine at the heart of
+    ArtfulType.
+
+    Everything here operates on plain char buffers and the small model
+    structs below. It includes no Mac headers, references no TextEdit
+    record and no globals, so it compiles and runs on any host with a C
+    compiler -- which is what lets it be unit-tested in milliseconds
+    (see tests/). The Mac side (markdown.c) is a thin adapter: it locks
+    the TextEdit handles, calls into mdcore, and maps the resulting spans
+    onto real TextStyle runs. The mapping from a markdown "kind" to a
+    concrete bold/Monaco/heading-size style lives only in that adapter.
+*/
+#ifndef MDCORE_H
+#define MDCORE_H
+
+/* Caps shared by the pure core and the Mac adapter. */
+#define MD_MAX_LINKS 64
+#define MD_MAX_SPANS 512
+
+/* A styled span, expressed in the STRIPPED text's own coordinates
+   (i.e. after the delimiter characters have been removed). kind is one
+   of the MD_KIND_* letters below; level is 1..3 for a heading, else 0;
+   linkID is a 1-based index into an MdLinkTable for a link, else 0. */
+#define MD_KIND_BOLD    'B'
+#define MD_KIND_ITALIC  'I'
+#define MD_KIND_CODE    'C'
+#define MD_KIND_LINK    'L'
+#define MD_KIND_HEADING 'H'
+
+typedef struct {
+    long  start;
+    long  end;
+    short kind;
+    short level;
+    short linkID;
+} MdSpan;
+
+/* Link URLs, stored Pascal-string style (byte [0] is the length). Index 0
+   is unused; valid link IDs run 1..count, matching the linkID in MdSpan. */
+typedef struct {
+    short         count;
+    unsigned char url[MD_MAX_LINKS + 1][256];
+} MdLinkTable;
+
+/* How MdStrip treats a leading "# " at the start of a line. */
+#define MD_HEADINGS_OFF   0  /* ignore '#'; leave "# " literal (paste path) */
+#define MD_HEADINGS_SPAN  1  /* strip the whole heading, record an H span   */
+                             /* over its body (the Writer-view path)        */
+#define MD_HEADINGS_STRIP 2  /* strip only the "# " prefix and keep parsing */
+                             /* the body inline, recording no span (the     */
+                             /* "clear formatting" path)                    */
+
+/* Options controlling MdStrip. */
+typedef struct {
+    int headingMode;       /* one of MD_HEADINGS_* above                   */
+    int startsAtLineStart; /* is src[0] the first character of a line?     */
+} MdStripOpts;
+
+/*
+    Strips markdown delimiters (**bold**, *italic*, `code`, [text](url),
+    and leading "# " headings) from src[0..len), writing the surviving
+    text to out and recording where each styled run landed.
+
+    - out must have room for at least len bytes (stripping never grows the
+      text). Returns the stripped length written to out.
+    - spans receives up to spanCap styled runs; *spanCount gets the count.
+      Runs past spanCap are still stripped, just not recorded (matching the
+      old MAX_STYLE_OPS behaviour).
+    - links receives the URLs found (reset to empty first). Pass NULL if the
+      caller doesn't need them (e.g. "clear formatting"); link text is still
+      stripped, spans just carry linkID 0.
+
+    Pure: no allocation, no globals, no Toolbox.
+*/
+long MdStrip(const char *src, long len, const MdStripOpts *opts,
+             char *out, long outCap,
+             MdSpan *spans, short spanCap, short *spanCount,
+             MdLinkTable *links);
+
+/* A maximal run of identically-styled characters (in src coordinates).
+   The four attributes combine freely -- a run can be bold + italic + code
+   + link all at once -- exactly as classic TextEdit reports a styled run.
+   linkID indexes an MdLinkTable when link is set. */
+typedef struct {
+    long  start;
+    long  end;
+    int   bold;
+    int   italic;
+    int   code;
+    int   link;
+    short linkID;
+} MdRun;
+
+/*
+    Emits inline markdown (**bold**, *italic*, `code`, [text](url)) for
+    src[0..len) given `runs` that partition it -- contiguous, in order,
+    covering every character. Delimiters open and close as the run
+    attributes change, innermost-first on close and outermost-first on
+    open (link is the outer wrapper), and everything still open is closed
+    at the end. links supplies URLs for linked runs (may be NULL -> the
+    URL comes out empty). Returns the number of bytes written to out.
+
+    This is the reverse of MdStrip and the exact per-run equivalent of the
+    old per-character TEGetStyle emit loop. Pure: no globals, no Toolbox.
+*/
+long MdEmitInline(const char *src, long len,
+                  const MdRun *runs, short runCount,
+                  const MdLinkTable *links,
+                  char *out, long outCap);
+
+/*
+    The plan MdDetectInline returns: the exact edit the Mac adapter applies
+    when a keystroke completes a markdown pattern. kind is MD_INLINE_NONE
+    when nothing matched (the adapter leaves the text alone), otherwise an
+    MD_KIND_* naming the style to apply.
+
+    The adapter performs, in this order:
+      1. delete [del1Start, del1End)   -- the higher-positioned range, so
+      2. delete [del2Start, del2End)   -- this one's coordinates stay valid
+      3. style  [styleStart, styleEnd) -- an empty range means "typing style"
+      4. if resetNormal, park a normal typing style at newCaret
+
+    Every position is in the pre-edit buffer's coordinates; because del1 is
+    always at higher offsets than del2 and the style range, running the two
+    deletes in order lands the style range exactly where these fields say.
+    A range with start == end is empty and skipped (headings have no del2).
+    linkURL carries the Pascal-string URL for kind == MD_KIND_LINK (the
+    adapter registers it and colours the run); it is empty otherwise.
+*/
+#define MD_INLINE_NONE 0  /* no pattern completed; leave the buffer alone */
+
+typedef struct {
+    short         kind;      /* MD_INLINE_NONE, or the MD_KIND_* matched   */
+    short         level;     /* heading level 1..3 (kind==HEADING), else 0 */
+    long          del1Start, del1End;   /* first (higher) deletion         */
+    long          del2Start, del2End;   /* second (lower) deletion         */
+    long          styleStart, styleEnd; /* range to style (empty => typing)*/
+    long          newCaret;  /* where resetNormal parks the typing style   */
+    int           resetNormal; /* 1: normal typing style at newCaret after */
+    unsigned char linkURL[256]; /* Pascal URL for a link, else [0] == 0    */
+} MdInlineEdit;
+
+/*
+    Live "type the markdown, get the formatting" detector for Writer mode.
+    Given the whole buffer, its length, the caret (selEnd, just past the
+    inserted character) and the character justTyped, decides whether that
+    keystroke completed **bold**, *italic*, `code`, [text](url), or a
+    leading "# " heading, and returns the edit plan above. Pure: it reads
+    buf but mutates nothing. '\r' is handled by the adapter, not here.
+*/
+MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justTyped);
+
+#endif /* MDCORE_H */
