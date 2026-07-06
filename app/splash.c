@@ -19,7 +19,7 @@ static const unsigned char kSplashImageBits[kSplashImageHeight * kSplashImageRow
 };
 
 /* Bump this on every release. */
-static const unsigned char kVersionString[] = "\pv0.1.2-alpha";
+static const unsigned char kVersionString[] = "\pv0.1.3-alpha";
 static const unsigned char kGitHubURL[] = "\pgithub.com/ActionRetro";
 
 static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
