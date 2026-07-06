@@ -69,6 +69,10 @@ static void ReadFile(StringPtr name, short vRefNum)
 
     GetEOF(refNum, &eof);
     textH = NewHandle(eof);
+    if (textH == NULL) {
+        FSClose(refNum);
+        return;
+    }
     HLock(textH);
     count = eof;
     FSRead(refNum, &count, *textH);
