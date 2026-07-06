@@ -41,6 +41,13 @@ void ClearStyles(void)
 static MdSpan gStripSpans[MD_MAX_SPANS];
 static MdLinkTable gStripLinks;
 
+/* Scratch for the emit direction (mdcore's MdEmitInline): the coalesced
+   style runs of the range being encoded, and a snapshot of the global link
+   table in mdcore's own layout. Shared by the non-reentrant
+   SyncHiddenToCanonical / EncodeSelectionAsMarkdown adapters. */
+static MdRun gEmitRuns[MD_MAX_SPANS];
+static MdLinkTable gEmitLinks;
+
 /*
     Builds gHiddenTE from gTE's canonical markdown text, stripping the
     delimiter characters themselves (**, *, `, [](), leading #s) and
@@ -181,6 +188,64 @@ void BuildHiddenView(void)
     Link underlines round-trip as "[text](url)" -- the url comes from
     gLinkURLs, keyed by the run's tsColor.red (see AddLinkURL above).
 */
+/* Coalesces the styled characters of te[from..to) into maximal same-style
+   runs (in coordinates relative to `from`), the input MdEmitInline needs.
+   Breaks runs on the bold/italic/code/link booleans only -- a run keeps the
+   linkID of its first character, matching the old emit loop, which captured
+   a link's URL when it opened and ignored any mid-underline id change.
+   Returns the run count. */
+static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
+                            MdRun *runs, short cap)
+{
+    short n = 0;
+    long i;
+
+    for (i = from; i < to; i++) {
+        TextStyle st;
+        short lh, fa;
+        int b, it, cd, lk;
+        short id;
+
+        TEGetStyle((short) i, &st, &lh, &fa, te);
+        b = (st.tsFace & bold) != 0;
+        it = (st.tsFace & italic) != 0;
+        cd = (st.tsFont == monacoFont);
+        lk = (st.tsFace & underline) != 0;
+        id = st.tsColor.red;
+
+        if (n > 0 && runs[n - 1].bold == b && runs[n - 1].italic == it &&
+            runs[n - 1].code == cd && runs[n - 1].link == lk) {
+            runs[n - 1].end = (i - from) + 1;
+        } else if (n < cap) {
+            runs[n].start = i - from;
+            runs[n].end = (i - from) + 1;
+            runs[n].bold = b;
+            runs[n].italic = it;
+            runs[n].code = cd;
+            runs[n].link = lk;
+            runs[n].linkID = id;
+            n++;
+        } else {
+            /* Run table full (a line/range with >512 style changes -- not
+               reachable in practice): fold the rest into the last run so no
+               text is dropped. */
+            runs[n - 1].end = (i - from) + 1;
+        }
+    }
+    return n;
+}
+
+/* Copies the live global link table into mdcore's MdLinkTable layout so the
+   pure emitter can look up URLs without touching Mac globals. */
+static void SnapshotLinkTable(void)
+{
+    short li;
+
+    gEmitLinks.count = gLinkCount;
+    for (li = 1; li <= gLinkCount; li++)
+        BlockMove(gLinkURLs[li], gEmitLinks.url[li], gLinkURLs[li][0] + 1);
+}
+
 void SyncHiddenToCanonical(void)
 {
     Handle srcH;
@@ -215,6 +280,7 @@ void SyncHiddenToCanonical(void)
     outLen = 0;
 
     GetFNum("\pMonaco", &monacoFont);
+    SnapshotLinkTable();
 
     HLock(srcH);
     HLock(outH);
@@ -255,64 +321,11 @@ void SyncHiddenToCanonical(void)
             BlockMove(*srcH + lineStart, *outH + outLen, lineEnd - lineStart);
             outLen += (lineEnd - lineStart);
         } else {
-            long i = lineStart;
-            Boolean inBold = false, inItalic = false, inCode = false, inLink = false;
-            Str255 curLinkURL;
-
-            while (i <= lineEnd) {
-                Boolean wantBold = false, wantItalic = false, wantCode = false, wantLink = false;
-                short linkID = 0;
-
-                if (i < lineEnd) {
-                    TextStyle st;
-                    short dlh, dfa;
-
-                    TEGetStyle((short) i, &st, &dlh, &dfa, gHiddenTE);
-                    wantBold = (st.tsFace & bold) != 0;
-                    wantItalic = (st.tsFace & italic) != 0;
-                    wantCode = (st.tsFont == monacoFont);
-                    wantLink = (st.tsFace & underline) != 0;
-                    linkID = st.tsColor.red;
-                }
-
-                /* Close innermost-first: code, italic, bold, then link
-                   (link is the outermost wrapper, [bold link](url)). */
-                if (inCode && !wantCode) { (*outH)[outLen++] = '`'; inCode = false; }
-                if (inItalic && !wantItalic) { (*outH)[outLen++] = '*'; inItalic = false; }
-                if (inBold && !wantBold) {
-                    (*outH)[outLen++] = '*';
-                    (*outH)[outLen++] = '*';
-                    inBold = false;
-                }
-                if (inLink && !wantLink) {
-                    (*outH)[outLen++] = ']';
-                    (*outH)[outLen++] = '(';
-                    BlockMove(curLinkURL + 1, *outH + outLen, curLinkURL[0]);
-                    outLen += curLinkURL[0];
-                    (*outH)[outLen++] = ')';
-                    inLink = false;
-                }
-
-                if (!inLink && wantLink) {
-                    (*outH)[outLen++] = '[';
-                    inLink = true;
-                    if (linkID >= 1 && linkID <= gLinkCount)
-                        BlockMove(gLinkURLs[linkID], curLinkURL, gLinkURLs[linkID][0] + 1);
-                    else
-                        curLinkURL[0] = 0;
-                }
-                if (!inBold && wantBold) {
-                    (*outH)[outLen++] = '*';
-                    (*outH)[outLen++] = '*';
-                    inBold = true;
-                }
-                if (!inItalic && wantItalic) { (*outH)[outLen++] = '*'; inItalic = true; }
-                if (!inCode && wantCode) { (*outH)[outLen++] = '`'; inCode = true; }
-
-                if (i < lineEnd)
-                    (*outH)[outLen++] = (*srcH)[i];
-                i++;
-            }
+            short runCount = BuildStyleRuns(gHiddenTE, lineStart, lineEnd,
+                                            monacoFont, gEmitRuns, MD_MAX_SPANS);
+            outLen += MdEmitInline(*srcH + lineStart, lineEnd - lineStart,
+                                   gEmitRuns, runCount, &gEmitLinks,
+                                   *outH + outLen, outCap - outLen);
         }
 
         if (lineEnd < len)
@@ -373,9 +386,7 @@ Handle EncodeSelectionAsMarkdown(short start, short end, TEHandle te)
     long urlSpace;
     short li;
     short monacoFont;
-    long i;
-    Boolean inBold = false, inItalic = false, inCode = false, inLink = false;
-    Str255 curLinkURL;
+    short runCount;
 
     srcH = (**te).hText;
     urlSpace = 0;
@@ -385,67 +396,15 @@ Handle EncodeSelectionAsMarkdown(short start, short end, TEHandle te)
     outH = NewHandle(outCap);
     if (outH == NULL)
         return NULL;
-    outLen = 0;
 
     GetFNum("\pMonaco", &monacoFont);
+    SnapshotLinkTable();
+    runCount = BuildStyleRuns(te, start, end, monacoFont, gEmitRuns, MD_MAX_SPANS);
 
     HLock(srcH);
     HLock(outH);
-
-    i = start;
-    while (i <= end) {
-        Boolean wantBold = false, wantItalic = false, wantCode = false, wantLink = false;
-        short linkID = 0;
-
-        if (i < end) {
-            TextStyle st;
-            short dlh, dfa;
-
-            TEGetStyle((short) i, &st, &dlh, &dfa, te);
-            wantBold = (st.tsFace & bold) != 0;
-            wantItalic = (st.tsFace & italic) != 0;
-            wantCode = (st.tsFont == monacoFont);
-            wantLink = (st.tsFace & underline) != 0;
-            linkID = st.tsColor.red;
-        }
-
-        if (inCode && !wantCode) { (*outH)[outLen++] = '`'; inCode = false; }
-        if (inItalic && !wantItalic) { (*outH)[outLen++] = '*'; inItalic = false; }
-        if (inBold && !wantBold) {
-            (*outH)[outLen++] = '*';
-            (*outH)[outLen++] = '*';
-            inBold = false;
-        }
-        if (inLink && !wantLink) {
-            (*outH)[outLen++] = ']';
-            (*outH)[outLen++] = '(';
-            BlockMove(curLinkURL + 1, *outH + outLen, curLinkURL[0]);
-            outLen += curLinkURL[0];
-            (*outH)[outLen++] = ')';
-            inLink = false;
-        }
-
-        if (!inLink && wantLink) {
-            (*outH)[outLen++] = '[';
-            inLink = true;
-            if (linkID >= 1 && linkID <= gLinkCount)
-                BlockMove(gLinkURLs[linkID], curLinkURL, gLinkURLs[linkID][0] + 1);
-            else
-                curLinkURL[0] = 0;
-        }
-        if (!inBold && wantBold) {
-            (*outH)[outLen++] = '*';
-            (*outH)[outLen++] = '*';
-            inBold = true;
-        }
-        if (!inItalic && wantItalic) { (*outH)[outLen++] = '*'; inItalic = true; }
-        if (!inCode && wantCode) { (*outH)[outLen++] = '`'; inCode = true; }
-
-        if (i < end)
-            (*outH)[outLen++] = (*srcH)[i];
-        i++;
-    }
-
+    outLen = MdEmitInline(*srcH + start, (long) (end - start),
+                          gEmitRuns, runCount, &gEmitLinks, *outH, outCap);
     HUnlock(srcH);
     HUnlock(outH);
     SetHandleSize(outH, outLen);

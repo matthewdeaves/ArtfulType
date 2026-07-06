@@ -78,4 +78,35 @@ long MdStrip(const char *src, long len, const MdStripOpts *opts,
              MdSpan *spans, short spanCap, short *spanCount,
              MdLinkTable *links);
 
+/* A maximal run of identically-styled characters (in src coordinates).
+   The four attributes combine freely -- a run can be bold + italic + code
+   + link all at once -- exactly as classic TextEdit reports a styled run.
+   linkID indexes an MdLinkTable when link is set. */
+typedef struct {
+    long  start;
+    long  end;
+    int   bold;
+    int   italic;
+    int   code;
+    int   link;
+    short linkID;
+} MdRun;
+
+/*
+    Emits inline markdown (**bold**, *italic*, `code`, [text](url)) for
+    src[0..len) given `runs` that partition it -- contiguous, in order,
+    covering every character. Delimiters open and close as the run
+    attributes change, innermost-first on close and outermost-first on
+    open (link is the outer wrapper), and everything still open is closed
+    at the end. links supplies URLs for linked runs (may be NULL -> the
+    URL comes out empty). Returns the number of bytes written to out.
+
+    This is the reverse of MdStrip and the exact per-run equivalent of the
+    old per-character TEGetStyle emit loop. Pure: no globals, no Toolbox.
+*/
+long MdEmitInline(const char *src, long len,
+                  const MdRun *runs, short runCount,
+                  const MdLinkTable *links,
+                  char *out, long outCap);
+
 #endif /* MDCORE_H */
