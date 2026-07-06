@@ -1,0 +1,5 @@
+# Compiled host-test executables (built in place by the Makefile).
+# Sources are kept; only the binaries are ignored.
+test_*
+!test_*.c
+!test_*.h
