@@ -378,11 +378,24 @@ static void EventLoop(void)
                 case osEvt:
                     /* MultiFinder suspend/resume. The message's high byte
                        tags it; bit 0 (RESUME) distinguishes resume from
-                       suspend. Handled the same as activate/deactivate so
-                       the caret and scrollbar track foreground state. */
+                       suspend. Our document window fills the whole screen
+                       (plainDBox over qd.screenBits.bounds), so a suspended
+                       app left on screen would keep hiding the Finder desktop
+                       and every other app behind it. So don't just dim the
+                       caret/scrollbar -- hide the window on suspend and show
+                       it again on resume, so switching to the Finder actually
+                       reveals the Finder. ShowWindow/HideWindow are original
+                       traps, and this osEvt only arrives under MultiFinder. */
                     if (((unsigned long) event.message & 0xFF000000UL) ==
-                            SUSPENDRESUMEBITS)
-                        SetWindowActive((event.message & RESUME) != 0);
+                            SUSPENDRESUMEBITS) {
+                        if (event.message & RESUME) {
+                            ShowWindow(gWindow);
+                            SetWindowActive(true);
+                        } else {
+                            SetWindowActive(false);
+                            HideWindow(gWindow);
+                        }
+                    }
                     break;
             }
         }

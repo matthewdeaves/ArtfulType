@@ -95,11 +95,17 @@ mdcore, and maps spans onto real `TextStyle` runs.
   `StandardGetFile`) whenever one exists.
 
 - **`SIZE` resource (-1) makes the app a MultiFinder citizen.** It sets the memory
-  partition and `acceptSuspendResumeEvents`; the `osEvt` handler then dims the
-  scrollbar / drops the caret on suspend like a deactivate. It is deliberately
-  marked **notHighLevelEventAware**: document opening uses the classic
-  `CountAppFiles`/`GetAppFiles` mechanism, not Apple Events — claiming AE
-  awareness without handlers would break "double-click a .md in the Finder."
+  partition and `acceptSuspendResumeEvents` (plus `doesActivateOnFGSwitch`, so the
+  app owns its own activate/deactivate across a foreground switch). The document
+  window fills the whole screen (`plainDBox` over `qd.screenBits.bounds`), so on
+  **suspend the `osEvt` handler `HideWindow`s it** (after deactivating) and on
+  **resume `ShowWindow`s + reactivates** — otherwise a backgrounded ArtfulType
+  would keep covering the Finder desktop and every other app. `Show/HideWindow`
+  are original traps and this `osEvt` only fires under MultiFinder, so it's
+  System-6-safe. It is deliberately marked **notHighLevelEventAware**: document
+  opening uses the classic `CountAppFiles`/`GetAppFiles` mechanism, not Apple
+  Events — claiming AE awareness without handlers would break "double-click a .md
+  in the Finder."
 
 - **Desk-accessory hosting is the app's job on System 6.** DAs opened from the Apple
   menu (`AppendResMenu 'DRVR'` + `OpenDeskAcc`) share the app's layer there, so:
