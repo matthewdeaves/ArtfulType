@@ -1,0 +1,86 @@
+/*
+    Resources for the ArtfulType Floppy Writer.
+
+    This file is configured by CMake (writer.r.in -> writer.r): @AT_DISK_IMAGE@
+    is replaced with the absolute path of the 800K image to embed, so Rez's
+    $$read finds it regardless of the build directory.
+*/
+
+#include "Types.r"      /* SIZE type (via Processes.r) */
+#include "Finder.r"
+#include "Dialogs.r"
+
+/* MultiFinder sizing. The embedded 800K image lives in the heap while we
+   write it, so ask for a roomy partition; the 1.5 MB minimum still holds the
+   image (~0.8 MB) plus code, stack and QuickDraw globals with headroom. On a
+   plain-Finder System 6 machine the partition is ignored and the app gets the
+   whole heap anyway. Marked notHighLevelEventAware: it uses no Apple events. */
+resource 'SIZE' (-1) {
+    reserved,
+    acceptSuspendResumeEvents,
+    reserved,
+    canBackground,
+    doesActivateOnFGSwitch,
+    backgroundAndForeground,
+    dontGetFrontClicks,
+    ignoreChildDiedEvents,
+    is32BitCompatible,
+    notHighLevelEventAware,
+    onlyLocalHLEvents,
+    notStationeryAware,
+    dontUseTextEditServices,
+    reserved,
+    reserved,
+    reserved,
+    2048 * 1024,
+    1536 * 1024
+};
+
+/* One-button message alert (used for About and for error reports). The text
+   rect is tall enough for the longest error line and the multi-line About
+   text to wrap without clipping in Geneva 9. */
+resource 'DITL' (128) {
+    {
+        {124, 300, 144, 380}, Button { enabled, "OK" },
+        {10, 20, 116, 380}, StaticText { disabled, "^0" }
+    }
+};
+
+resource 'ALRT' (128) {
+    {60, 50, 216, 442},
+    128,
+    {
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1
+    },
+    alertPositionMainScreen
+};
+
+/* Erase / Cancel confirmation. Item 1 (Erase) is the default. */
+resource 'DITL' (129) {
+    {
+        {104, 300, 124, 380}, Button { enabled, "Erase" },
+        {104, 200, 124, 280}, Button { enabled, "Cancel" },
+        {10, 20, 96, 380}, StaticText { disabled, "^0" }
+    }
+};
+
+resource 'ALRT' (129) {
+    {60, 50, 196, 442},
+    129,
+    {
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1
+    },
+    alertPositionMainScreen
+};
+
+/* The whole 800K bootable image, embedded verbatim.
+   embedded image sha256: @AT_DISK_IMAGE_HASH@ (forces a re-embed when it changes) */
+data 'ATdi' (128, "ArtfulType 800K disk image") {
+    $$read("@AT_DISK_IMAGE@")
+};
