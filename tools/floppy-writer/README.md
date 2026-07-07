@@ -4,6 +4,11 @@ A tiny classic-Mac app that turns a **blank 800K floppy** into a bootable
 **ArtfulType (System 6.0.8)** disk — on real hardware, with nothing else
 installed.
 
+![ArtfulType Floppy Writer finishing a disk on a real Macintosh SE](mac-se-floppy-writer.jpeg)
+
+*Writing a bootable ArtfulType floppy on a Macintosh SE (System 6.0.8) — the
+freshly written disk is ejected below.*
+
 ## Why it exists
 
 Retro68's `LaunchAPPL` can send an *application* to a Mac over the network,
