@@ -25,6 +25,13 @@ endif()
 message(STATUS "Embedding disk image: ${AT_DISK_IMAGE}")
 
 # Bake the absolute image path into the .r so Rez's $$read always resolves.
+# Rez only re-runs when writer.r changes, and the path alone wouldn't change if
+# the image is regenerated in place -- so embed the image's content hash in the
+# .r too, and mark the image a configure dependency. Now regenerating the image
+# reconfigures (new hash -> writer.r changes -> Rez re-embeds), and a plain
+# `make` can never ship a stale image.
+file(SHA256 "${AT_DISK_IMAGE}" AT_DISK_IMAGE_HASH)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${AT_DISK_IMAGE}")
 configure_file(writer.r.in "${CMAKE_CURRENT_BINARY_DIR}/writer.r" @ONLY)
 
 add_application(ArtfulTypeFloppyWriter

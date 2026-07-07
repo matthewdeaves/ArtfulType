@@ -62,10 +62,13 @@
 #define iQuit          1
 
 /* --- geometry ---------------------------------------------------------- */
+/* Kept short and opened near the menu bar so the whole window -- progress
+   bar included -- fits on a compact Mac's 512x342 screen. */
 #define kWinWidth      460
-#define kWinHeight     300
-#define kLogLines      9        /* how many log lines the window shows      */
-#define kLogTop        76       /* y of the first log line                  */
+#define kWinHeight     200
+#define kWinTop        42       /* content top; title bar sits below the menu bar */
+#define kLogLines      7        /* how many log lines the window shows      */
+#define kLogTop        72       /* y of the first log line                  */
 #define kLogLeading    13
 
 /* 819200 bytes / 512 = 1600 blocks. We write in 32 KB runs (a multiple of
@@ -475,7 +478,7 @@ static void MakeWindow(void)
     short left, top;
 
     left = (qd.screenBits.bounds.right - kWinWidth) / 2;
-    top  = qd.screenBits.bounds.top + 60;
+    top  = qd.screenBits.bounds.top + kWinTop;
     SetRect(&bounds, left, top, left + kWinWidth, top + kWinHeight);
 
     gWindow = NewWindow(NULL, &bounds, "\pArtfulType Floppy Writer",

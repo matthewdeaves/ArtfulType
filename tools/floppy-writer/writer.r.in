@@ -79,7 +79,8 @@ resource 'ALRT' (129) {
     alertPositionMainScreen
 };
 
-/* The whole 800K bootable image, embedded verbatim. */
+/* The whole 800K bootable image, embedded verbatim.
+   embedded image sha256: @AT_DISK_IMAGE_HASH@ (forces a re-embed when it changes) */
 data 'ATdi' (128, "ArtfulType 800K disk image") {
     $$read("@AT_DISK_IMAGE@")
 };
