@@ -109,7 +109,7 @@ jobs:
           body: |
             Distraction-free Markdown editor for classic 68k Macs (System 6/7).
 
-            **Ready-to-run disk images** (all boot System 6.0.8 with ArtfulType):
+            **Ready-to-run disk images** (all boot System 6.0.8 with ArtfulType; volume named "ArtfulType"):
             - `HD1_ArtfulType.hda` — bootable BlueSCSI/PiSCSI device image for real hardware. The `HD1_` prefix matches BlueSCSI's SCSI-ID-1 convention, so drop it on the SD card as-is.
             - `ArtfulType-20MB.dsk` — bootable 20 MB volume for Mini vMac.
             - `ArtfulType-800K.dsk` / `ArtfulType-800K.image` — bootable 800K floppy (raw HFS, and the DiskCopy 4.2 form) for Mini vMac, a flux floppy writer, or Disk Copy 4.2.
@@ -118,9 +118,12 @@ jobs:
             - `ArtfulType.bin` — the application on its own (MacBinary), to add to an existing System volume.
             - `START_HERE.md` — the getting-started guide, written in ArtfulType.
 
-            The disk images are formatted and blessed in software on Linux;
-            CI checks their boot structures (boot blocks + blessed-folder ID),
-            though not a live boot. The 800K floppy derives from a
-            known-bootable System 6 base; the 20 MB images are blessed by
-            `tools/bless_hfs.py`. They embed Apple System 6.0.8 — see
-            `disk-base/README.md` for provenance.
+            The disk images are formatted and blessed in software on Linux (both
+            the floppy and the 20 MB volume the same way, via `tools/bless_hfs.py`),
+            and CI asserts their on-disk boot structures. The **800K floppy is
+            boot-tested on a real Macintosh SE** — it boots System 6.0.8 and
+            launches ArtfulType; the 20 MB `.hda` is structurally verified and
+            emulator-mount-validated. New this release: a `tools/floppy-writer`
+            app that writes a bootable floppy on a bare Mac from the launcher
+            alone. The images embed Apple System 6.0.8 — see `disk-base/README.md`
+            for provenance.
