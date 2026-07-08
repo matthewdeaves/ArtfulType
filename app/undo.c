@@ -31,13 +31,13 @@ void UpdateEditMenuState(void)
 }
 
 /*
-    Captures the current document (always as canonical markdown text,
-    syncing first if Writer mode is active) onto the undo stack, and
-    clears the redo stack -- any new edit invalidates whatever could
-    have been redone. Bounded: pushing past MAX_UNDO_LEVELS evicts the
-    oldest entry rather than growing unboundedly.
+    Captures gTE's canonical text (syncing first if Writer mode is active)
+    onto `stack`, evicting the oldest entry when the stack is full so it never
+    grows past MAX_UNDO_LEVELS. Returns false, touching nothing, if the
+    snapshot buffer can't be allocated. Shared by the undo and redo pushes,
+    which differ only in which stack they target and what they do afterward.
 */
-void PushUndoSnapshot(void)
+static Boolean CaptureSnapshot(UndoSnapshot stack[], short *count)
 {
     UndoSnapshot *slot;
     Handle textH;
@@ -50,25 +50,39 @@ void PushUndoSnapshot(void)
     len = (**gTE).teLength;
     textH = NewHandle(len);
     if (textH == NULL)
-        return;
+        return false;
     HLock(textH);
     HLock((**gTE).hText);
     BlockMove(*(**gTE).hText, *textH, len);
     HUnlock((**gTE).hText);
     HUnlock(textH);
 
-    if (gUndoCount == MAX_UNDO_LEVELS) {
-        FreeSnapshot(&gUndoStack[0]);
+    if (*count == MAX_UNDO_LEVELS) {
+        FreeSnapshot(&stack[0]);
         for (i = 0; i < MAX_UNDO_LEVELS - 1; i++)
-            gUndoStack[i] = gUndoStack[i + 1];
-        gUndoCount--;
+            stack[i] = stack[i + 1];
+        (*count)--;
     }
 
-    slot = &gUndoStack[gUndoCount++];
+    slot = &stack[(*count)++];
     slot->textH = textH;
     slot->length = len;
     slot->selStart = (**gActiveTE).selStart;
     slot->selEnd = (**gActiveTE).selEnd;
+    return true;
+}
+
+/*
+    Captures the current document onto the undo stack and clears the redo
+    stack -- any genuine new edit invalidates whatever could have been redone.
+    A failed capture leaves both stacks and the menu untouched.
+*/
+void PushUndoSnapshot(void)
+{
+    short i;
+
+    if (!CaptureSnapshot(gUndoStack, &gUndoCount))
+        return;
 
     for (i = 0; i < gRedoCount; i++)
         FreeSnapshot(&gRedoStack[i]);
@@ -77,40 +91,12 @@ void PushUndoSnapshot(void)
     UpdateEditMenuState();
 }
 
-/* Same idea as PushUndoSnapshot, but onto the redo stack -- called
-   right before undoing, so redoing can bring the undone state back. */
+/* Same idea, onto the redo stack -- called right before undoing so redoing
+   can bring the undone state back. Deliberately does NOT clear the undo stack
+   or touch the menu (unlike PushUndoSnapshot): a redo push isn't a new edit. */
 static void PushRedoSnapshot(void)
 {
-    UndoSnapshot *slot;
-    Handle textH;
-    long len;
-    short i;
-
-    if (gHideMarkdown)
-        SyncHiddenToCanonical();
-
-    len = (**gTE).teLength;
-    textH = NewHandle(len);
-    if (textH == NULL)
-        return;
-    HLock(textH);
-    HLock((**gTE).hText);
-    BlockMove(*(**gTE).hText, *textH, len);
-    HUnlock((**gTE).hText);
-    HUnlock(textH);
-
-    if (gRedoCount == MAX_UNDO_LEVELS) {
-        FreeSnapshot(&gRedoStack[0]);
-        for (i = 0; i < MAX_UNDO_LEVELS - 1; i++)
-            gRedoStack[i] = gRedoStack[i + 1];
-        gRedoCount--;
-    }
-
-    slot = &gRedoStack[gRedoCount++];
-    slot->textH = textH;
-    slot->length = len;
-    slot->selStart = (**gActiveTE).selStart;
-    slot->selEnd = (**gActiveTE).selEnd;
+    CaptureSnapshot(gRedoStack, &gRedoCount);
 }
 
 /* Replaces gTE's text with a snapshot and, if Writer mode is active,
@@ -180,43 +166,60 @@ void DoRedo(void)
     UpdateEditMenuState();
 }
 
-void DoCut(void)
+/*
+    Builds a 'TEXT' scrap image of gActiveTE[selStart,selEnd): the canonical
+    markdown for the selection in Writer mode (delimiters re-added), or the raw
+    bytes in Markdown mode. Returns NULL on allocation failure. Shared by DoCut
+    and DoCopy, which differ only in what they do after -- cut also snapshots
+    for undo and deletes the selection.
+*/
+static Handle EncodeSelectionForScrap(short selStart, short selEnd)
 {
-    short selStart, selEnd;
-    long selLen;
     Handle scrapText;
+    Handle textH;
+    long selLen;
 
-    selStart = (**gActiveTE).selStart;
-    selEnd = (**gActiveTE).selEnd;
-    if (selStart == selEnd)
-        return;
+    if (gHideMarkdown)
+        return EncodeSelectionAsMarkdown(selStart, selEnd, gActiveTE);
 
-    if (gHideMarkdown) {
-        scrapText = EncodeSelectionAsMarkdown(selStart, selEnd, gActiveTE);
-    } else {
-        Handle textH = (**gActiveTE).hText;
-
-        selLen = selEnd - selStart;
-        scrapText = NewHandle(selLen);
-        if (scrapText != NULL) {
-            HLock(textH);
-            HLock(scrapText);
-            BlockMove(*textH + selStart, *scrapText, selLen);
-            HUnlock(textH);
-            HUnlock(scrapText);
-        }
+    selLen = selEnd - selStart;
+    scrapText = NewHandle(selLen);
+    if (scrapText != NULL) {
+        textH = (**gActiveTE).hText;
+        HLock(textH);
+        HLock(scrapText);
+        BlockMove(*textH + selStart, *scrapText, selLen);
+        HUnlock(textH);
+        HUnlock(scrapText);
     }
-    if (scrapText == NULL)
-        return;
+    return scrapText;
+}
 
-    PushUndoSnapshot();
-
+/* Replaces the desk scrap with scrapText's bytes as 'TEXT', then frees it. */
+static void PutHandleToScrap(Handle scrapText)
+{
     ZeroScrap();
     HLock(scrapText);
     PutScrap(GetHandleSize(scrapText), 'TEXT', *scrapText);
     HUnlock(scrapText);
     DisposeHandle(scrapText);
+}
 
+void DoCut(void)
+{
+    short selStart = (**gActiveTE).selStart;
+    short selEnd = (**gActiveTE).selEnd;
+    Handle scrapText;
+
+    if (selStart == selEnd)
+        return;
+
+    scrapText = EncodeSelectionForScrap(selStart, selEnd);
+    if (scrapText == NULL)
+        return;
+
+    PushUndoSnapshot();
+    PutHandleToScrap(scrapText);
     TEDelete(gActiveTE);
 
     gDirty = true;
@@ -226,38 +229,18 @@ void DoCut(void)
 
 void DoCopy(void)
 {
-    short selStart, selEnd;
-    long selLen;
+    short selStart = (**gActiveTE).selStart;
+    short selEnd = (**gActiveTE).selEnd;
     Handle scrapText;
 
-    selStart = (**gActiveTE).selStart;
-    selEnd = (**gActiveTE).selEnd;
     if (selStart == selEnd)
         return;
 
-    if (gHideMarkdown) {
-        scrapText = EncodeSelectionAsMarkdown(selStart, selEnd, gActiveTE);
-    } else {
-        Handle textH = (**gActiveTE).hText;
-
-        selLen = selEnd - selStart;
-        scrapText = NewHandle(selLen);
-        if (scrapText != NULL) {
-            HLock(textH);
-            HLock(scrapText);
-            BlockMove(*textH + selStart, *scrapText, selLen);
-            HUnlock(textH);
-            HUnlock(scrapText);
-        }
-    }
+    scrapText = EncodeSelectionForScrap(selStart, selEnd);
     if (scrapText == NULL)
         return;
 
-    ZeroScrap();
-    HLock(scrapText);
-    PutScrap(GetHandleSize(scrapText), 'TEXT', *scrapText);
-    HUnlock(scrapText);
-    DisposeHandle(scrapText);
+    PutHandleToScrap(scrapText);
 }
 
 void DoPaste(void)
