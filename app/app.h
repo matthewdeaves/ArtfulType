@@ -25,6 +25,9 @@
 #define FONT_SIZE 18
 #define SCROLLBAR_WIDTH 16
 #define kBackspaceKey 0x08
+#define kReturnKey    0x0D
+#define kEnterKey     0x03
+#define kEscapeKey    0x1B
 
 #define mFile    128
 #define iNew     1
