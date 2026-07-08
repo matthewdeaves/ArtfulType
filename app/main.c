@@ -287,6 +287,12 @@ static void EventLoop(void)
                                 DoMenuCommand(MenuKey(key));
                             }
                         }
+                    } else if (isContentKey && key != kBackspaceKey &&
+                               !DocCanGrowBy(gActiveTE, 1)) {
+                        /* At the document-size cap: refuse further inserted
+                           characters (backspace/arrows still work so the
+                           user can get back under the limit). */
+                        SysBeep(1);
                     } else {
                         if (isContentKey) {
                             if (!gTypingRunActive) {

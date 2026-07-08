@@ -275,6 +275,12 @@ void DoPaste(void)
         return;
     }
 
+    if (!DocCanGrowBy(gActiveTE, len)) {
+        DisposeHandle(scrapH);
+        ShowError("\pThere isn't room to paste this much text.");
+        return;
+    }
+
     PushUndoSnapshot();
 
     if (gHideMarkdown) {
