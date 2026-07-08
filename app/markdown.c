@@ -819,6 +819,46 @@ void ToggleFace(Style face)
     TESetStyle(doFace, &ts, true, gHiddenTE);
 }
 
+/* Briefly hilites a push button so a keyboard-triggered OK/Cancel gives
+   the same visual click feedback the mouse would. */
+static void FlashDialogButton(DialogPtr dlg, short item)
+{
+    DialogItemType type;
+    Handle itemH;
+    Rect box;
+    long ticks;
+
+    GetDialogItem(dlg, item, &type, &itemH, &box);
+    HiliteControl((ControlHandle) itemH, inButton);
+    Delay(8, &ticks);
+    HiliteControl((ControlHandle) itemH, 0);
+}
+
+/* Modal filter for the link dialog: Return/Enter confirms, Escape or
+   Cmd-. cancels -- the standard keyboard shortcuts a text-entry dialog is
+   expected to honour. All other events fall through to ModalDialog (which,
+   with the default item set, also maintains the OK button's outline). */
+static pascal Boolean LinkDialogFilter(DialogPtr dlg, EventRecord *evt, short *item)
+{
+    unsigned char ch;
+
+    if (evt->what != keyDown && evt->what != autoKey)
+        return false;
+
+    ch = evt->message & charCodeMask;
+    if (ch == kReturnKey || ch == kEnterKey) {
+        FlashDialogButton(dlg, iLinkOK);
+        *item = iLinkOK;
+        return true;
+    }
+    if (ch == kEscapeKey || ((evt->modifiers & cmdKey) && ch == '.')) {
+        FlashDialogButton(dlg, iLinkCancel);
+        *item = iLinkCancel;
+        return true;
+    }
+    return false;
+}
+
 /* Prompts for a URL; returns true and fills in `url` if OK was clicked. */
 static Boolean ShowLinkURLDialog(unsigned char *url)
 {
@@ -828,16 +868,21 @@ static Boolean ShowLinkURLDialog(unsigned char *url)
     Handle itemH;
     Rect box;
     Boolean result;
+    ModalFilterUPP filter;
 
     dlg = GetNewDialog(kLinkDialog, NULL, (WindowPtr) -1L);
     if (dlg == NULL)
         return false;
 
+    SetDialogDefaultItem(dlg, iLinkOK);
+    SetDialogCancelItem(dlg, iLinkCancel);
     SelectDialogItemText(dlg, iLinkField, 0, 32767);
 
+    filter = NewModalFilterUPP(LinkDialogFilter);
     do {
-        ModalDialog(NULL, &item);
+        ModalDialog(filter, &item);
     } while (item != iLinkOK && item != iLinkCancel);
+    DisposeModalFilterUPP(filter);
 
     result = (item == iLinkOK);
     if (result) {
