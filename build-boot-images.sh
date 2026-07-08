@@ -56,19 +56,23 @@ hcopy -m :System "$WORK/System.bin"
 hcopy -m :Finder "$WORK/Finder.bin"
 humount >/dev/null
 
-# The app ships an ICN#/FREF/BNDL, but the Finder only installs those icons
-# into a volume's Desktop file when the app advertises a bundle (the hasBundle
-# Finder flag) and has not yet been "inited". Retro68's build leaves the flags
-# at 0, so a freshly-copied ArtfulType shows the generic application icon. Set
-# hasBundle (0x2000) and clear hasBeenInited (0x0100) in the MacBinary header
-# before importing, and fix the MacBinary CRC so the header stays valid. hcopy
-# then carries these onto the volume, and the Finder paints the real icon on
-# first mount.
+# A hermetic, Mac-less disk build can't populate the volume's Desktop database,
+# so the usual route to an app icon (Finder installs the app's BNDL on first
+# mount, given the hasBundle flag) is unreliable here. We take two routes at
+# once, both by patching the app's MacBinary Finder flags before import:
+#   * hasCustomIcon (0x0400) -- the app carries a copy of its icon at the
+#     custom-icon resource ID -16455 (see app/main.r), which the Finder draws
+#     straight off the file, no Desktop database needed.
+#   * hasBundle (0x2000) -- still set, so the Desktop database also gets the
+#     app's bundle where the Finder does install it (documents, other volumes).
+# hasBeenInited (0x0100) is cleared so the Finder reprocesses the file, and the
+# MacBinary CRC is recomputed so the patched header stays valid. hcopy carries
+# all of this onto the volume.
 APPBIN="$WORK/ArtfulType.bin"
 python3 - "$BIN" "$APPBIN" <<'PY'
 import sys
 src = bytearray(open(sys.argv[1], "rb").read())
-src[73] |= 0x20          # hasBundle  (flags bits 15-8)
+src[73] |= 0x24          # hasBundle (0x2000) | hasCustomIcon (0x0400)
 src[73] &= ~0x01         # clear hasBeenInited (bit 8)
 def crc16(data):         # MacBinary II CRC-16-CCITT over bytes 0..123
     crc = 0
@@ -182,9 +186,10 @@ python3 - "$WORK/icon_check.bin" <<'PY'
 import sys
 d = open(sys.argv[1], "rb").read()
 flags = (d[73] << 8) | d[101]
-if not (flags & 0x2000) or (flags & 0x0100):
-    sys.exit("error: app icon will be generic -- hasBundle unset or inited set (flags=0x%04X)" % flags)
-print("  icon OK: app advertises its bundle (flags=0x%04X)" % flags)
+if not (flags & 0x0400) or not (flags & 0x2000) or (flags & 0x0100):
+    sys.exit("error: app icon will be generic -- need hasCustomIcon+hasBundle set, "
+             "inited clear (flags=0x%04X)" % flags)
+print("  icon OK: hasCustomIcon + hasBundle set, inited clear (flags=0x%04X)" % flags)
 PY
 
 echo

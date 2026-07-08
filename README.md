@@ -70,6 +70,8 @@ Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compi
 
 `deploy.sh` / `build-bluescsi-image.sh` / `package-release.sh` are the older pipeline that deploys onto pre-built base images under `vmac/` (e.g. for a fast Mini vMac test loop); `build-boot-images.sh` supersedes them for producing release images.
 
+`tools/floppy-writer/` is a small companion app for making a physical floppy on a real Mac that has nothing but a System and the [Retro68](https://github.com/autc04/Retro68) app launcher: it embeds the 800K image and writes it to an inserted disk, so a bare compact Mac (e.g. a Mac SE) can create its own bootable ArtfulType floppy. See its README.
+
 ## License
 
 Code: GPLv3 — see [LICENSE](LICENSE).
