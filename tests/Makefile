@@ -14,14 +14,19 @@ CC     ?= cc
 CFLAGS  = -std=c89 -Wall -Wextra -Wno-unused-function \
           -DAT_HOST_TEST -I. -I../app
 
-# Each test executable and the sources it exercises. mdcore joins here in the
-# next step; test_smoke proves the harness on its own until then.
-BINS = test_smoke
+# Each test executable and the sources it exercises.
+BINS = test_smoke test_mdcore test_mddetect
 
 all: check
 
 test_smoke: test_smoke.c test_util.h
 	$(CC) $(CFLAGS) -o $@ test_smoke.c
+
+test_mdcore: test_mdcore.c ../app/mdcore.c ../app/mdcore.h test_util.h
+	$(CC) $(CFLAGS) -o $@ test_mdcore.c ../app/mdcore.c
+
+test_mddetect: test_mddetect.c ../app/mdcore.c ../app/mdcore.h test_util.h
+	$(CC) $(CFLAGS) -o $@ test_mddetect.c ../app/mdcore.c
 
 check: $(BINS)
 	@fail=0; \

@@ -16,6 +16,7 @@
 #include <SegLoad.h>
 #include <Multiverse.h>
 #include <string.h>
+#include "mdcore.h"
 
 #define MARGIN_H     64
 #define MARGIN_TOP   32
@@ -82,7 +83,9 @@
 #define mHelp    132
 #define iAbout   1
 
-#define MAX_STYLE_OPS 512
+/* The pure core (mdcore.h) owns these caps; alias the app-side names to
+   the single source of truth so the two never drift apart. */
+#define MAX_STYLE_OPS MD_MAX_SPANS
 
 /*
     The active document is bounded to this many characters. TextEdit's hard
@@ -139,7 +142,7 @@ typedef struct {
     (gLinkCount = 0) at the start of every BuildHiddenView, since that's
     a full reparse of gTE and re-derives whichever links currently exist.
 */
-#define MAX_LINKS 64
+#define MAX_LINKS MD_MAX_LINKS
 
 /* Global state -- actual storage lives in main.c */
 extern WindowPtr gWindow;
