@@ -15,11 +15,13 @@
 #                          on the SD card as-is, no renaming.
 #   START_HERE.md          the getting-started guide, shipped alongside.
 #
-# The 800K floppy simply adds the app to the already-blessed base volume.
-# The 20 MB images are hand-built: a fresh HFS volume is formatted, the
-# System Folder is installed, and the volume is blessed (boot blocks + the
-# blessed-folder ID in the MDB) by tools/bless_hfs.py -- the two things
-# hformat does not do. See that script and the CLAUDE.md "Building bootable
+# Both the 800K floppy and the 20 MB volume are hand-built the same way
+# (make_blessed_volume): a fresh HFS volume named "ArtfulType" is formatted,
+# the System Folder + app + guide are installed, and the volume is blessed
+# (boot blocks + the blessed-folder ID in the MDB) by tools/bless_hfs.py --
+# the two things hformat does not do. The System, Finder and boot blocks all
+# come verbatim from the proven-bootable base volume, so only the container is
+# freshly made. See tools/bless_hfs.py and the CLAUDE.md "Building bootable
 # disk images on Linux" note.
 #
 # NOTE: the images embed Apple system software (System 6.0.8, from the base
@@ -32,8 +34,8 @@ BASE="${AT_SYSTEM_BASE:-disk-base/system6.dsk}"
 BIN="app/build/ArtfulType.bin"
 GUIDE="doc/START_HERE.md"
 DIST="dist"
-FLOPPY_NAME="The Artful Type"
-VOL_NAME="The Artful Type"
+VOL_NAME="ArtfulType"          # HFS volume name for every image
+ROOT="$(pwd)"                  # repo root (for absolute paths when we cd elsewhere)
 
 for tool in hformat hmount hmkdir hcd hcopy hattrib humount djjr python3; do
     command -v "$tool" >/dev/null 2>&1 || { echo "error: $tool not found on PATH" >&2; exit 1; }
@@ -54,96 +56,142 @@ hcopy -m :System "$WORK/System.bin"
 hcopy -m :Finder "$WORK/Finder.bin"
 humount >/dev/null
 
+# The app ships an ICN#/FREF/BNDL, but the Finder only installs those icons
+# into a volume's Desktop file when the app advertises a bundle (the hasBundle
+# Finder flag) and has not yet been "inited". Retro68's build leaves the flags
+# at 0, so a freshly-copied ArtfulType shows the generic application icon. Set
+# hasBundle (0x2000) and clear hasBeenInited (0x0100) in the MacBinary header
+# before importing, and fix the MacBinary CRC so the header stays valid. hcopy
+# then carries these onto the volume, and the Finder paints the real icon on
+# first mount.
+APPBIN="$WORK/ArtfulType.bin"
+python3 - "$BIN" "$APPBIN" <<'PY'
+import sys
+src = bytearray(open(sys.argv[1], "rb").read())
+src[73] |= 0x20          # hasBundle  (flags bits 15-8)
+src[73] &= ~0x01         # clear hasBeenInited (bit 8)
+def crc16(data):         # MacBinary II CRC-16-CCITT over bytes 0..123
+    crc = 0
+    for ch in data:
+        crc ^= ch << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
+    return crc
+c = crc16(bytes(src[0:124]))
+src[124] = (c >> 8) & 0xFF
+src[125] = c & 0xFF
+open(sys.argv[2], "wb").write(src)
+PY
+
+# Build a fresh, blessed, bootable HFS volume with ArtfulType on it.
+#   $1 = output .dsk   $2 = size in KiB   $3 = volume name
+# On a freshly formatted HFS volume the next catalog node ID is 16, so the
+# first object created gets ID 16 deterministically. We create the System
+# Folder first and bless that ID; the invariant is asserted, not trusted.
+make_blessed_volume() {
+    local out="$1" size_kb="$2" name="$3" cnid report
+
+    dd if=/dev/zero of="$out" bs=1024 count="$size_kb" status=none
+    hformat -l "$name" "$out" >/dev/null
+
+    cnid="$(python3 -c "import struct,sys;print(struct.unpack('>I',open(sys.argv[1],'rb').read()[1054:1058])[0])" "$out")"
+    [ "$cnid" = "16" ] || { echo "error: unexpected drNxtCNID $cnid on fresh $out" >&2; exit 1; }
+
+    hmount "$out" >/dev/null
+    hmkdir "System Folder"                 # <- becomes dir ID 16
+    hcopy -m "$APPBIN" :ArtfulType         # root-level files while cwd is root
+    hcopy -t "$GUIDE" :START_HERE.md       #   (hcd : does NOT return to root)
+    hattrib -t TEXT -c ArtT :START_HERE.md
+    hcd "System Folder"
+    hcopy -m "$WORK/System.bin" :System
+    hcopy -m "$WORK/Finder.bin" :Finder
+    humount >/dev/null
+
+    python3 tools/bless_hfs.py "$out" "$BASE" 16 >/dev/null
+    # Capture djjr's output first: a bare `djjr … | grep -q` under `pipefail`
+    # can SIGPIPE djjr (grep closes the pipe on match) and report a false failure.
+    report="$(djjr analyze "$out")"
+    # Match djjr's literal "(bootable)" token -- a plain `bootable` substring
+    # would also match "not bootable".
+    grep -qF '(bootable)' <<<"$report" \
+        || { echo "error: $out not bootable after blessing" >&2; exit 1; }
+}
+
 # --- 800K bootable floppy -----------------------------------------------
-# The base is already a blessed, bootable System 6 volume; just add the app
-# and guide and wrap it in a DiskCopy 4.2 header.
 echo "==> Building 800K bootable floppy"
-cp "$BASE" "$WORK/floppy.dsk"
-chmod +w "$WORK/floppy.dsk"
-hmount "$WORK/floppy.dsk" >/dev/null
-hcopy -m "$BIN" :ArtfulType
-hcopy -t "$GUIDE" :START_HERE.md
-hattrib -t TEXT -c ArtT :START_HERE.md
-humount >/dev/null
-# Capture djjr's output first: a bare `djjr … | grep -q` under `pipefail`
-# can SIGPIPE djjr (grep closes the pipe on match) and report a false failure.
-floppy_report="$(djjr analyze "$WORK/floppy.dsk")"
-grep -q bootable <<<"$floppy_report" \
-    || { echo "error: 800K floppy not bootable" >&2; exit 1; }
+make_blessed_volume "$WORK/floppy.dsk" 800 "$VOL_NAME"
 cp "$WORK/floppy.dsk" "$DIST/ArtfulType-800K.dsk"
-python3 make_diskcopy_image.py "$WORK/floppy.dsk" "$DIST/ArtfulType-800K.image" "$FLOPPY_NAME"
+python3 make_diskcopy_image.py "$WORK/floppy.dsk" "$DIST/ArtfulType-800K.image" "$VOL_NAME"
 
 # --- 20 MB bootable volume ----------------------------------------------
 echo "==> Building 20 MB bootable volume"
-VOL="$WORK/vol20.dsk"
-dd if=/dev/zero of="$VOL" bs=1024 count=20480 status=none
-hformat -l "$VOL_NAME" "$VOL" >/dev/null
-
-# On a freshly formatted HFS volume the next catalog node ID is 16, so the
-# first object created gets ID 16 deterministically. We create the System
-# Folder first and bless that ID. Assert the invariant rather than trust it.
-next_cnid="$(python3 -c "import struct,sys;print(struct.unpack('>I',open(sys.argv[1],'rb').read()[1054:1058])[0])" "$VOL")"
-[ "$next_cnid" = "16" ] || { echo "error: unexpected drNxtCNID $next_cnid on fresh volume" >&2; exit 1; }
-
-hmount "$VOL" >/dev/null
-hmkdir "System Folder"                 # <- becomes dir ID 16
-hcopy -m "$BIN" :ArtfulType            # root-level files while cwd is root
-hcopy -t "$GUIDE" :START_HERE.md       #   (hcd : does NOT return to root)
-hattrib -t TEXT -c ArtT :START_HERE.md
-hcd "System Folder"
-hcopy -m "$WORK/System.bin" :System
-hcopy -m "$WORK/Finder.bin" :Finder
-humount >/dev/null
-
-python3 tools/bless_hfs.py "$VOL" "$BASE" 16 >/dev/null
-vol_report="$(djjr analyze "$VOL")"
-grep -q bootable <<<"$vol_report" \
-    || { echo "error: 20 MB volume not bootable after blessing" >&2; exit 1; }
-cp "$VOL" "$DIST/ArtfulType-20MB.dsk"
+make_blessed_volume "$WORK/vol20.dsk" 20480 "$VOL_NAME"
+cp "$WORK/vol20.dsk" "$DIST/ArtfulType-20MB.dsk"
 
 # --- 20 MB BlueSCSI device image ----------------------------------------
 echo "==> Wrapping into a BlueSCSI device image"
-djjr convert to-device "$VOL" "$DIST/HD1_ArtfulType.hda" >/dev/null
+# `djjr convert` drops a scratch UUID directory in its cwd; run it inside $WORK
+# (cleaned by the trap) with absolute paths so nothing lands in the repo root.
+( cd "$WORK" && djjr convert to-device "$WORK/vol20.dsk" "$ROOT/$DIST/HD1_ArtfulType.hda" >/dev/null )
 
 # --- guide, shipped alongside like upstream -----------------------------
 cp "$GUIDE" "$DIST/START_HERE.md"
 
 echo
 echo "==> Verifying outputs"
-# Assert the actual on-disk boot structures, not just djjr's flag (which is
-# derived from the boot signature and so is near-tautological after blessing):
-# boot signature 'LK', MDB signature 'BD', blessed folder ID == 16, and the
-# boot blocks byte-identical to the known-bootable base. This catches a
-# mis-write or an off-by-one in the offsets; it does NOT replace a real boot
-# test on hardware (see the note below).
-python3 - "$DIST/ArtfulType-20MB.dsk" "$BASE" <<'PY'
+# Assert the actual on-disk structures for each blessed .dsk, not just djjr's
+# flag (which is derived from the boot signature and so is near-tautological
+# after blessing): boot signature 'LK', MDB signature 'BD', blessed folder ID
+# == 16, boot blocks byte-identical to the known-bootable base, and the volume
+# name. This catches a mis-write or an off-by-one in the offsets; it does NOT
+# replace a real boot test on hardware (see the note below).
+verify_volume() {
+    python3 - "$1" "$BASE" "$VOL_NAME" <<'PY'
 import struct, sys
-vol = open(sys.argv[1], 'rb').read()
+vol  = open(sys.argv[1], 'rb').read()
 base = open(sys.argv[2], 'rb').read()
+want = sys.argv[3].encode()
 def need(cond, msg):
     if not cond:
-        sys.exit("error: 20 MB volume failed structural check: " + msg)
+        sys.exit("error: %s failed structural check: %s" % (sys.argv[1], msg))
 need(struct.unpack('>H', vol[0:2])[0] == 0x4C4B, "no 'LK' boot signature")
 need(vol[0:1024] == base[0:1024], "boot blocks differ from base")
 need(struct.unpack('>H', vol[1024:1026])[0] == 0x4244, "no 'BD' MDB signature")
 need(struct.unpack('>I', vol[1116:1120])[0] == 16, "blessed folder ID != 16")
-print("  structure OK: boot blocks + blessed folder ID == 16")
+n = vol[1060]
+need(vol[1061:1061 + n] == want, "volume name is %r, want %r" % (vol[1061:1061 + n], want))
+print("  structure OK (%s): boot blocks + blessed ID 16 + name %r" % (sys.argv[1], want.decode()))
 PY
-raw_report="$(djjr analyze "$DIST/ArtfulType-20MB.dsk")"
-grep -q bootable <<<"$raw_report" \
-    || { echo "error: ArtfulType-20MB.dsk not bootable" >&2; exit 1; }
-echo "  bootable OK: $DIST/ArtfulType-20MB.dsk"
+}
+verify_volume "$DIST/ArtfulType-800K.dsk"
+verify_volume "$DIST/ArtfulType-20MB.dsk"
+
 # A device image (.hda) prints a partition map, not a "(bootable)" flag, so
 # it's checked for the wrapped HFS partition.
 hda_report="$(djjr analyze "$DIST/HD1_ArtfulType.hda")"
 grep -q 'HFS Volume' <<<"$hda_report" \
     || { echo "error: HD1_ArtfulType.hda has no HFS partition" >&2; exit 1; }
 echo "  HFS partition OK: $DIST/HD1_ArtfulType.hda"
+
+# The app must advertise its bundle (hasBundle set, hasBeenInited clear) or the
+# Finder paints the generic application icon instead of ArtfulType's ICN#.
+hmount "$DIST/ArtfulType-800K.dsk" >/dev/null
+hcopy -m :ArtfulType "$WORK/icon_check.bin"
+humount >/dev/null
+python3 - "$WORK/icon_check.bin" <<'PY'
+import sys
+d = open(sys.argv[1], "rb").read()
+flags = (d[73] << 8) | d[101]
+if not (flags & 0x2000) or (flags & 0x0100):
+    sys.exit("error: app icon will be generic -- hasBundle unset or inited set (flags=0x%04X)" % flags)
+print("  icon OK: app advertises its bundle (flags=0x%04X)" % flags)
+PY
+
 echo
 echo "Done. dist/ contents:"
 ls -l "$DIST"
 echo
-echo "NOTE: the 20 MB images are blessed on Linux and structurally verified,"
-echo "but not boot-tested here. The 800K floppy derives from a known-bootable"
-echo "System 6 base. Boot-test on real hardware or an emulator before relying"
-echo "on the .hda in production."
+echo "NOTE: these volumes are blessed on Linux and structurally verified, but"
+echo "only the 800K floppy is boot-tested on real hardware (a Mac SE). The 20 MB"
+echo ".hda is validated by mounting under an emulator; boot-test it on a real"
+echo "compact Mac (BlueSCSI) before relying on it in production."

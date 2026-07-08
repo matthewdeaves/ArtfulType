@@ -169,7 +169,14 @@ mdcore, and maps spans onto real `TextStyle` runs.
   The committed System 6.0.8 base lives in `disk-base/` (git-ignored `*.dsk`
   except that one file). djjr reports a raw volume as `(bootable)` off the boot
   signature; a *device* image (`.hda`) instead prints its partition map, so
-  verify it via the wrapped `HFS Volume` line, not a `bootable` grep. The 20 MB
-  images are blessed and structurally verified on Linux but **not boot-tested**
-  there (a Quadra-class `qemu-system-m68k` can't run System 6); the 800K floppy
-  derives directly from the proven-bootable base.
+  verify it via the wrapped `HFS Volume` line, not a `bootable` grep. The 800K
+  floppy and the 20 MB volume are built the *same* way (`make_blessed_volume`),
+  both named `ArtfulType`; only the container is fresh — System, Finder and the
+  boot blocks come verbatim from the base. The app's `hasBundle` Finder flag is
+  set (and `hasBeenInited` cleared) in its MacBinary header before `hcopy`, with
+  the header CRC fixed, or the Finder paints the generic application icon instead
+  of ArtfulType's `ICN#`. The 800K floppy is **boot-tested on a real Mac SE**
+  (System 6.0.8, booting and launching ArtfulType); the 20 MB `.hda` is
+  structurally verified and validated by mounting under an emulator, but not
+  System-6 boot-tested there (a Quadra-class `qemu-system-m68k` can't run
+  System 6).
