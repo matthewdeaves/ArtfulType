@@ -2,12 +2,12 @@
 
 `system6.dsk` is a minimal, already-bootable **System 6.0.8** HFS floppy
 volume (800 KB): a System Folder containing just `System` and `Finder`, with
-~78 KB free. `build-boot-images.sh` uses it two ways:
-
-- as the base for the bootable 800K app floppy (it is already blessed, so the
-  build only adds `ArtfulType` and the guide);
-- as the source of the `System` + `Finder` files, and of the boot blocks, that
-  `tools/bless_hfs.py` installs into the freshly-formatted 20 MB volume.
+~78 KB free. [`build-boot-images.sh`](../build-boot-images.sh) uses it as the
+source of the `System` and `Finder` files, and of the boot blocks, that
+[`tools/bless_hfs.py`](../tools/bless_hfs.py) installs into each volume it builds. Both output images — the 800K floppy and the 20 MB
+volume — are freshly `hformat`'d and then blessed this way; nothing is copied
+from `system6.dsk` wholesale, only its System Folder contents and its
+proven-bootable boot blocks.
 
 ## Provenance
 

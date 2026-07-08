@@ -2,7 +2,7 @@
 
 These tests run on any machine with a C compiler — **no Mac, no emulator, no
 Retro68 toolchain.** They exercise ArtfulType's *pure* markdown logic (the
-`mdcore` layer) directly, in milliseconds.
+[`mdcore`](../app/mdcore.c) layer) directly, in milliseconds.
 
 ```sh
 cd tests
@@ -32,11 +32,11 @@ they catch regressions rather than merely exercising code.
 
 | File | Role |
 |---|---|
-| `test_util.h` | Zero-dependency C89 assertion macros (`CHECK`, `CHECK_EQ`, `CHECK_STR`). |
-| `host_mac_types.h` | Tiny shims (`Boolean`, `Str255`) so tests speak the Mac side's vocabulary. `mdcore` itself needs no Toolbox types. |
-| `test_smoke.c` | Proves the harness compiles and runs. |
-| `test_mdcore.c` | Golden + round-trip tests for `mdcore`'s strip/emit engine. |
-| `test_mddetect.c` | Case tables for the live inline-markdown detector. |
-| `Makefile` | `make check` builds and runs every `test_*` with native `cc -std=c89`. |
+| [`test_util.h`](test_util.h) | Zero-dependency C89 assertion macros (`CHECK`, `CHECK_EQ`, `CHECK_STR`). |
+| [`host_mac_types.h`](host_mac_types.h) | Tiny shims (`Boolean`, `Str255`) so tests speak the Mac side's vocabulary. `mdcore` itself needs no Toolbox types. |
+| [`test_smoke.c`](test_smoke.c) | Proves the harness compiles and runs. |
+| [`test_mdcore.c`](test_mdcore.c) | Golden + round-trip tests for `mdcore`'s strip/emit engine. |
+| [`test_mddetect.c`](test_mddetect.c) | Case tables for the live inline-markdown detector. |
+| [`Makefile`](Makefile) | `make check` builds and runs every `test_*` with native `cc -std=c89`. |
 
 The harness pattern is borrowed from the author's BomberTalk project.

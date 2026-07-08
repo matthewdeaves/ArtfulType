@@ -6,7 +6,7 @@ A distraction-free Markdown writing app for classic 68k Macintosh computers (Sys
 
 ## Features
 
-- **Writer mode** — live Markdown-to-rich-text formatting as you type (bold, italic, code, headings, links)
+- **Writer mode** — live Markdown-to-rich-text formatting as you type (bold, italic, code, strikethrough, headings, links)
 - **Markdown mode** — plain raw-syntax editing
 - Links: type `[text](url)` inline, or select text and use Style → Link
 - Cut/Copy/Paste and multi-level Undo/Redo, with standard keyboard shortcuts
@@ -62,15 +62,15 @@ Saved files are plain `.md` text, editable in any text editor.
 
 ## Building
 
-Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compiler for classic Mac OS. See `app/CMakeLists.txt` for the build configuration.
+Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compiler for classic Mac OS. See [`app/CMakeLists.txt`](app/CMakeLists.txt) for the build configuration.
 
 ### Disk images
 
-`build-boot-images.sh` builds every bootable disk image from scratch on Linux — no Mac required. It formats a fresh HFS volume, installs a System Folder from the committed System 6.0.8 base (`disk-base/`), and *blesses* the volume in software (`tools/bless_hfs.py` writes the boot blocks and the blessed-folder ID that `hformat` alone doesn't). The [release workflow](.github/workflows/release.yml) runs the same script, so tagging `vX.Y.Z` builds and publishes all images automatically. It needs `hfsutils`, [`djjr`](https://diskjockey.onegeekarmy.eu/djjr/), and `python3`.
+[`build-boot-images.sh`](build-boot-images.sh) builds every bootable disk image from scratch on Linux — no Mac required. It formats a fresh HFS volume, installs a System Folder from the committed System 6.0.8 base ([`disk-base/`](disk-base/)), and *blesses* the volume in software ([`tools/bless_hfs.py`](tools/bless_hfs.py) writes the boot blocks and the blessed-folder ID that `hformat` alone doesn't). The [release workflow](.github/workflows/release.yml) runs the same script, so tagging `vX.Y.Z` builds and publishes all images automatically. It needs `hfsutils`, [`djjr`](https://diskjockey.onegeekarmy.eu/djjr/), and `python3`.
 
-`deploy.sh` / `build-bluescsi-image.sh` / `package-release.sh` are the older pipeline that deploys onto pre-built base images under `vmac/` (e.g. for a fast Mini vMac test loop); `build-boot-images.sh` supersedes them for producing release images.
+[`deploy.sh`](deploy.sh) / [`build-bluescsi-image.sh`](build-bluescsi-image.sh) / [`package-release.sh`](package-release.sh) are the older pipeline that deploys onto pre-built base images under `vmac/` (e.g. for a fast Mini vMac test loop); `build-boot-images.sh` supersedes them for producing release images.
 
-`tools/floppy-writer/` is a small companion app for making a physical floppy on a real Mac that has nothing but a System and the [Retro68](https://github.com/autc04/Retro68) app launcher: it embeds the 800K image and writes it to an inserted disk, so a bare compact Mac (e.g. a Mac SE) can create its own bootable ArtfulType floppy. See its README.
+[`tools/floppy-writer/`](tools/floppy-writer/) is a small companion app for making a physical floppy on a real Mac that has nothing but a System and the [Retro68](https://github.com/autc04/Retro68) app launcher: it embeds the 800K image and writes it to an inserted disk, so a bare compact Mac like the Mac SE can create its own bootable ArtfulType floppy. See [its README](tools/floppy-writer/README.md).
 
 ## License
 
