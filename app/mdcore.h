@@ -109,4 +109,46 @@ long MdEmitInline(const char *src, long len,
                   const MdLinkTable *links,
                   char *out, long outCap);
 
+/*
+    The plan MdDetectInline returns: the exact edit the Mac adapter applies
+    when a keystroke completes a markdown pattern. kind is MD_INLINE_NONE
+    when nothing matched (the adapter leaves the text alone), otherwise an
+    MD_KIND_* naming the style to apply.
+
+    The adapter performs, in this order:
+      1. delete [del1Start, del1End)   -- the higher-positioned range, so
+      2. delete [del2Start, del2End)   -- this one's coordinates stay valid
+      3. style  [styleStart, styleEnd) -- an empty range means "typing style"
+      4. if resetNormal, park a normal typing style at newCaret
+
+    Every position is in the pre-edit buffer's coordinates; because del1 is
+    always at higher offsets than del2 and the style range, running the two
+    deletes in order lands the style range exactly where these fields say.
+    A range with start == end is empty and skipped (headings have no del2).
+    linkURL carries the Pascal-string URL for kind == MD_KIND_LINK (the
+    adapter registers it and colours the run); it is empty otherwise.
+*/
+#define MD_INLINE_NONE 0  /* no pattern completed; leave the buffer alone */
+
+typedef struct {
+    short         kind;      /* MD_INLINE_NONE, or the MD_KIND_* matched   */
+    short         level;     /* heading level 1..3 (kind==HEADING), else 0 */
+    long          del1Start, del1End;   /* first (higher) deletion         */
+    long          del2Start, del2End;   /* second (lower) deletion         */
+    long          styleStart, styleEnd; /* range to style (empty => typing)*/
+    long          newCaret;  /* where resetNormal parks the typing style   */
+    int           resetNormal; /* 1: normal typing style at newCaret after */
+    unsigned char linkURL[256]; /* Pascal URL for a link, else [0] == 0    */
+} MdInlineEdit;
+
+/*
+    Live "type the markdown, get the formatting" detector for Writer mode.
+    Given the whole buffer, its length, the caret (selEnd, just past the
+    inserted character) and the character justTyped, decides whether that
+    keystroke completed **bold**, *italic*, `code`, [text](url), or a
+    leading "# " heading, and returns the edit plan above. Pure: it reads
+    buf but mutates nothing. '\r' is handled by the adapter, not here.
+*/
+MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justTyped);
+
 #endif /* MDCORE_H */
