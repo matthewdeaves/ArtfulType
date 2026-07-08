@@ -175,3 +175,86 @@ long MdStrip(const char *src, long len, const MdStripOpts *opts,
     *spanCount = nSpans;
     return outLen;
 }
+
+long MdEmitInline(const char *src, long len,
+                  const MdRun *runs, short runCount,
+                  const MdLinkTable *links,
+                  char *out, long outCap)
+{
+    long outLen = 0;
+    int inBold = 0, inItalic = 0, inCode = 0, inLink = 0;
+    unsigned char curLinkURL[256];
+    short r;
+
+    (void) len;
+    (void) outCap; /* caller sizes out generously; see the adapters */
+
+    curLinkURL[0] = 0;
+
+    /* One extra iteration past the last run (all attributes false) closes
+       whatever is still open at the end of the range -- the same job the
+       old loop's final i == lineEnd / i == end pass did. */
+    for (r = 0; r <= runCount; r++) {
+        int wantBold = 0, wantItalic = 0, wantCode = 0, wantLink = 0;
+        short linkID = 0;
+        long runStart, runEnd, p;
+
+        if (r < runCount) {
+            wantBold = runs[r].bold;
+            wantItalic = runs[r].italic;
+            wantCode = runs[r].code;
+            wantLink = runs[r].link;
+            linkID = runs[r].linkID;
+            runStart = runs[r].start;
+            runEnd = runs[r].end;
+        } else {
+            runStart = runEnd = len;
+        }
+
+        /* Close innermost-first: code, italic, bold, then link (link is the
+           outermost wrapper, [bold link](url)). */
+        if (inCode && !wantCode) { out[outLen++] = '`'; inCode = 0; }
+        if (inItalic && !wantItalic) { out[outLen++] = '*'; inItalic = 0; }
+        if (inBold && !wantBold) {
+            out[outLen++] = '*';
+            out[outLen++] = '*';
+            inBold = 0;
+        }
+        if (inLink && !wantLink) {
+            long k;
+            out[outLen++] = ']';
+            out[outLen++] = '(';
+            for (k = 0; k < curLinkURL[0]; k++)
+                out[outLen++] = (char) curLinkURL[1 + k];
+            out[outLen++] = ')';
+            inLink = 0;
+        }
+
+        /* Open outermost-first: link, bold, italic, code. */
+        if (!inLink && wantLink) {
+            out[outLen++] = '[';
+            inLink = 1;
+            if (links != 0 && linkID >= 1 && linkID <= links->count) {
+                long n = links->url[linkID][0];
+                long k;
+                curLinkURL[0] = (unsigned char) n;
+                for (k = 0; k < n; k++)
+                    curLinkURL[1 + k] = links->url[linkID][1 + k];
+            } else {
+                curLinkURL[0] = 0;
+            }
+        }
+        if (!inBold && wantBold) {
+            out[outLen++] = '*';
+            out[outLen++] = '*';
+            inBold = 1;
+        }
+        if (!inItalic && wantItalic) { out[outLen++] = '*'; inItalic = 1; }
+        if (!inCode && wantCode) { out[outLen++] = '`'; inCode = 1; }
+
+        for (p = runStart; p < runEnd; p++)
+            out[outLen++] = src[p];
+    }
+
+    return outLen;
+}

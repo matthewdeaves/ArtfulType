@@ -14,6 +14,8 @@ static char g_out[4096];
 static MdSpan g_spans[MD_MAX_SPANS];
 static short g_nSpans;
 static MdLinkTable g_links;
+static char g_out2[4096];
+static MdRun g_runs[MD_MAX_SPANS];
 
 /* Run MdStrip over a C string; returns stripped length. headingMode is one
    of MD_HEADINGS_OFF / _SPAN / _STRIP. */
@@ -172,6 +174,94 @@ static void test_empty_italic_from_double_star(void)
     CHECK_EQ(g_spans[0].end, 0, "empty italic zero-length");
 }
 
+/* Build emit runs from strip's non-overlapping single-kind spans: for each
+   stripped char, gather the attributes of whatever span covers it, then
+   coalesce equal neighbours. (The Mac adapter builds the same runs from
+   TEGetStyle instead.) */
+static short runs_from_spans(long textLen, const MdSpan *spans, short nSpans,
+                             MdRun *runs)
+{
+    short nRuns = 0;
+    long c;
+
+    for (c = 0; c < textLen; c++) {
+        int b = 0, it = 0, cd = 0, lk = 0;
+        short id = 0, s;
+
+        for (s = 0; s < nSpans; s++) {
+            if (spans[s].start <= c && c < spans[s].end) {
+                switch (spans[s].kind) {
+                    case MD_KIND_BOLD:   b = 1; break;
+                    case MD_KIND_ITALIC: it = 1; break;
+                    case MD_KIND_CODE:   cd = 1; break;
+                    case MD_KIND_LINK:   lk = 1; id = spans[s].linkID; break;
+                    default: break;
+                }
+            }
+        }
+        if (nRuns > 0 && runs[nRuns - 1].bold == b && runs[nRuns - 1].italic == it &&
+            runs[nRuns - 1].code == cd && runs[nRuns - 1].link == lk &&
+            runs[nRuns - 1].linkID == id) {
+            runs[nRuns - 1].end = c + 1;
+        } else {
+            runs[nRuns].start = c;
+            runs[nRuns].end = c + 1;
+            runs[nRuns].bold = b;
+            runs[nRuns].italic = it;
+            runs[nRuns].code = cd;
+            runs[nRuns].link = lk;
+            runs[nRuns].linkID = id;
+            nRuns++;
+        }
+    }
+    return nRuns;
+}
+
+/* strip then emit must recover the original inline markdown. */
+static void roundtrip(const char *s, const char *msg)
+{
+    long stripped = strip(s, MD_HEADINGS_OFF, 1);
+    short nRuns = runs_from_spans(stripped, g_spans, g_nSpans, g_runs);
+    long emitted = MdEmitInline(g_out, stripped, g_runs, nRuns, &g_links,
+                                g_out2, (long) sizeof g_out2);
+    CHECK_STR(g_out2, emitted, s, msg);
+}
+
+static void test_emit_roundtrip(void)
+{
+    roundtrip("plain text", "plain round-trips");
+    roundtrip("**bold**", "bold round-trips");
+    roundtrip("*italic*", "italic round-trips");
+    roundtrip("`code`", "code round-trips");
+    roundtrip("a **b** c", "bold in context round-trips");
+    roundtrip("**bold** and *italic* and `code`", "several inline round-trip");
+    roundtrip("see [text](http://x) end", "link round-trips");
+    roundtrip("[a](u1) and [b](u2)", "two links round-trip");
+}
+
+static void test_emit_combined_attributes(void)
+{
+    MdRun runs[1];
+    long n;
+
+    /* A run that is bold AND italic: open **, then *, close *, then **. */
+    runs[0].start = 0; runs[0].end = 2;
+    runs[0].bold = 1; runs[0].italic = 1; runs[0].code = 0; runs[0].link = 0;
+    runs[0].linkID = 0;
+    n = MdEmitInline("hi", 2, runs, 1, (MdLinkTable *) 0, g_out2, sizeof g_out2);
+    CHECK_STR(g_out2, n, "***hi***", "bold+italic nests as ***");
+
+    /* A bold link: open [ then **, close **, then ](url). */
+    g_links.count = 1;
+    g_links.url[1][0] = 1;
+    g_links.url[1][1] = 'u';
+    runs[0].start = 0; runs[0].end = 1;
+    runs[0].bold = 1; runs[0].italic = 0; runs[0].code = 0; runs[0].link = 1;
+    runs[0].linkID = 1;
+    n = MdEmitInline("x", 1, runs, 1, &g_links, g_out2, sizeof g_out2);
+    CHECK_STR(g_out2, n, "[**x**](u)", "bold link wraps correctly");
+}
+
 int main(void)
 {
     printf("test_mdcore (strip):\n");
@@ -188,5 +278,8 @@ int main(void)
     test_heading_strip_mode();
     test_unmatched_delimiters();
     test_empty_italic_from_double_star();
+    printf("test_mdcore (emit):\n");
+    test_emit_roundtrip();
+    test_emit_combined_attributes();
     return TEST_RESULT();
 }
