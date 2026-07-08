@@ -93,7 +93,9 @@ pure core (`app/mdcore.{c,h}`) is Toolbox-free and not subject to them.
   menu-bar clock is *not* a menu**: it's redrawn on a timer by the Date & Time
   control panel (the folded-in SuperClock) and has no Toolbox off-switch, so it
   can only be turned off there — an app cannot hide just the clock without hiding
-  the whole bar. See `MakeMenu` in `main.c`.
+  the whole bar. See `MakeMenu` in `main.c`, and
+  [ADR 0001](../../doc/adr/0001-menu-bar-and-system-menus.md) for why we keep a
+  standard bar (Apple menu, switcher) and strip only what the Toolbox allows.
 
 - **Modal text dialogs need a filter proc.** `ModalDialog(NULL, …)` gives no
   Return-confirms / Escape-cancels. The link dialog installs a `ModalFilterUPP`
