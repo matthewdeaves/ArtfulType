@@ -146,6 +146,32 @@ resource 'ICN#' (128) {
     }
 };
 
+/* The same typewriter icon, duplicated at the well-known custom-icon ID
+   (kCustomIconResource = -16455). With the file's hasCustomIcon Finder flag
+   set (done in build-boot-images.sh), the Finder draws this directly off the
+   file, without needing the volume's Desktop database to have the app's
+   bundle installed -- which a hermetic, Mac-less disk build can't do. */
+resource 'ICN#' (-16455) {
+    {
+        $"00000000000000000000000000000000"
+        $"003FFF00004000800180008003FFFFC0"
+        $"00200040002FFE8000200080004FFC80"
+        $"004001000080010007FFFFE03FFFFFFC"
+        $"2E0000742EFFFF743EFFFF7C07FFFFE0"
+        $"044444201FFFFFF83FFFFFFC3000000C"
+        $"3FFFFFFC1FFFFFF80000000000000000"
+        $"00000000000000000000000000000000",
+        $"00000000000000000000000000000000"
+        $"003FFF00007FFF8001FFFF8003FFFFC0"
+        $"003FFFC0003FFF80003FFF80007FFF80"
+        $"007FFF0000FFFF000FFFFFF03FFFFFFC"
+        $"3FFFFFFC3FFFFFFC3FFFFFFC0FFFFFF0"
+        $"0FFFFFF03FFFFFFC3FFFFFFC3FFFFFFC"
+        $"3FFFFFFC3FFFFFFC0000000000000000"
+        $"00000000000000000000000000000000"
+    }
+};
+
 resource 'FREF' (128) {
     'APPL', 0, ""
 };
