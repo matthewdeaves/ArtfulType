@@ -1,5 +1,138 @@
 #include "app.h"
 
+/*
+    The visual encoding of a markdown style -- how a "kind" (bold, code,
+    heading, link, ...) becomes a concrete classic TextStyle -- lives here and
+    nowhere else. Everything below (BuildHiddenView, InsertMarkdownAsStyled, the
+    live DetectInlineMarkdown converter, the round-trip in SyncHiddenToCanonical)
+    goes through these helpers, so the encoding has exactly one home to edit.
+*/
+
+/* Times and Monaco are the only two fonts the Writer view uses, and a font's
+   number is fixed for the life of the app -- so resolve each name once and
+   cache it. GetFNum otherwise walks the font list on every call, and these run
+   on every style pass. (-1 == not yet resolved; both fonts have positive IDs.) */
+static short TimesFont(void)
+{
+    static short cached = -1;
+    if (cached < 0)
+        GetFNum("\pTimes", &cached);
+    return cached;
+}
+
+static short MonacoFont(void)
+{
+    static short cached = -1;
+    if (cached < 0)
+        GetFNum("\pMonaco", &cached);
+    return cached;
+}
+
+/* A link's URL rides in its run's tsColor.red as a 1-based ID (0 == no link);
+   see the gLinkURLs note in app.h. green/blue must stay 0 (the ID is meant to
+   be visually black). These two helpers are the only places that read or write
+   that convention, so that invariant lives in one spot. */
+static void SetLinkID(TextStyle *ts, short id)
+{
+    ts->tsColor.red = id;
+    ts->tsColor.green = 0;
+    ts->tsColor.blue = 0;
+}
+
+static short GetLinkID(const TextStyle *ts)
+{
+    return ts->tsColor.red;
+}
+
+/* A level-N heading (N == 1..3) renders as bold at this size -- larger N is
+   smaller. HeadingLevelForSize is the exact inverse (0 == not a heading size),
+   so the Writer<->Markdown round-trip stays lossless. Keep the two paired. */
+static short HeadingSizeForLevel(short level)
+{
+    return CurrentFontSize() + (4 - level) * 4;
+}
+
+static short HeadingLevelForSize(short size)
+{
+    short level;
+
+    for (level = 1; level <= 3; level++)
+        if (size == HeadingSizeForLevel(level))
+            return level;
+    return 0;
+}
+
+/* Fills `ts` (and `mode`, the doFace/doFont/... mask naming which fields apply)
+   with the style for a markdown span kind. linkID is used only for a LINK. This
+   is the single forward encoding; the several TESetStyle sites share it. */
+static void StyleForKind(short kind, short level, short linkID,
+                         TextStyle *ts, short *mode)
+{
+    switch (kind) {
+    case MD_KIND_BOLD:
+        ts->tsFace = bold;
+        *mode = doFace;
+        break;
+    case MD_KIND_ITALIC:
+        ts->tsFace = italic;
+        *mode = doFace;
+        break;
+    case MD_KIND_CODE:
+        ts->tsFont = MonacoFont();
+        *mode = doFont;
+        break;
+    case MD_KIND_LINK:
+        ts->tsFace = underline;
+        SetLinkID(ts, linkID);
+        *mode = doFace + doColor;
+        break;
+    case MD_KIND_HEADING:
+        ts->tsFace = bold;
+        ts->tsSize = HeadingSizeForLevel(level);
+        *mode = doFace + doSize;
+        break;
+    default:
+        *mode = 0;
+        break;
+    }
+}
+
+/*
+    Normalizes te[from,to) to the base (plain Times) style, then paints each
+    span's style onto te, shifting span coordinates by `offset` and remapping
+    link IDs through `remap` (NULL == use the span's own linkID). Shared by
+    BuildHiddenView (whole document, no offset, no remap) and
+    InsertMarkdownAsStyled (the pasted range, offset and remapped).
+*/
+static void ApplySpanStyles(TEHandle te, short from, short to, short offset,
+                            const MdSpan *spans, short count, const short *remap)
+{
+    TextStyle base;
+    short fontNum;
+    short k;
+
+    fontNum = TimesFont();
+    base.tsFont = fontNum;
+    base.tsFace = normal;
+    base.tsSize = CurrentFontSize();
+    base.tsColor.red = base.tsColor.green = base.tsColor.blue = 0;
+    TESetSelect(from, to, te);
+    TESetStyle(doFont + doFace + doSize + doColor, &base, true, te);
+
+    for (k = 0; k < count; k++) {
+        TextStyle st;
+        short mode;
+        short linkID = remap ? remap[spans[k].linkID] : spans[k].linkID;
+
+        StyleForKind(spans[k].kind, spans[k].level, linkID, &st, &mode);
+        if (mode != 0) {
+            TESetSelect((short) (offset + spans[k].start),
+                        (short) (offset + spans[k].end), te);
+            TESetStyle(mode, &st, true, te);
+        }
+    }
+}
+
 short AddLinkURL(const unsigned char *url)
 {
     if (gLinkCount >= MAX_LINKS)
@@ -54,7 +187,7 @@ static short CompactLinkTable(void)
         short lh, fa, id;
 
         TEGetStyle((short) i, &st, &lh, &fa, gHiddenTE);
-        id = st.tsColor.red;
+        id = GetLinkID(&st);
         if ((st.tsFace & underline) && id >= 1 && id <= gLinkCount &&
             remap[id] == 0) {
             newCount++;
@@ -80,7 +213,7 @@ static short CompactLinkTable(void)
         int underlined;
 
         TEGetStyle((short) i, &st, &lh, &fa, gHiddenTE);
-        id = st.tsColor.red;
+        id = GetLinkID(&st);
         underlined = (st.tsFace & underline) != 0;
 
         runEnd = i + 1;
@@ -90,7 +223,7 @@ static short CompactLinkTable(void)
 
             TEGetStyle((short) runEnd, &st2, &lh2, &fa2, gHiddenTE);
             if (((st2.tsFace & underline) != 0) != underlined ||
-                st2.tsColor.red != id)
+                GetLinkID(&st2) != id)
                 break;
             runEnd++;
         }
@@ -98,9 +231,7 @@ static short CompactLinkTable(void)
         if (underlined && id >= 1 && id <= gLinkCount && remap[id] != id) {
             TextStyle ns;
 
-            ns.tsColor.red = remap[id];
-            ns.tsColor.green = 0;
-            ns.tsColor.blue = 0;
+            SetLinkID(&ns, remap[id]);
             TESetSelect((short) i, (short) runEnd, gHiddenTE);
             TESetStyle(doColor, &ns, false, gHiddenTE);
         }
@@ -139,7 +270,7 @@ void ClearStyles(void)
     short savedStart = (**gTE).selStart;
     short savedEnd = (**gTE).selEnd;
 
-    GetFNum("\pTimes", &fontNum);
+    fontNum = TimesFont();
     ts.tsFont = fontNum;
     ts.tsFace = normal;
     ts.tsSize = CurrentFontSize();
@@ -200,8 +331,6 @@ void BuildHiddenView(void)
     Handle outH;
     long outLen;
     short spanCount;
-    short fontNum;
-    TextStyle ts;
     short k;
     Rect savedViewRect;
     MdStripOpts opts;
@@ -249,46 +378,10 @@ void BuildHiddenView(void)
     HUnlock(outH);
     DisposeHandle(outH);
 
-    GetFNum("\pTimes", &fontNum);
-    ts.tsFont = fontNum;
-    ts.tsFace = normal;
-    ts.tsSize = CurrentFontSize();
-    ts.tsColor.red = ts.tsColor.green = ts.tsColor.blue = 0;
-    TESetSelect(0, 32767, gHiddenTE);
-    TESetStyle(doFont + doFace + doSize + doColor, &ts, true, gHiddenTE);
-
-    /* The one place that maps a markdown "kind" onto a concrete TextStyle. */
-    for (k = 0; k < spanCount; k++) {
-        TextStyle opStyle;
-
-        TESetSelect((short) gStripSpans[k].start, (short) gStripSpans[k].end, gHiddenTE);
-        switch (gStripSpans[k].kind) {
-            case MD_KIND_BOLD:
-                opStyle.tsFace = bold;
-                TESetStyle(doFace, &opStyle, true, gHiddenTE);
-                break;
-            case MD_KIND_ITALIC:
-                opStyle.tsFace = italic;
-                TESetStyle(doFace, &opStyle, true, gHiddenTE);
-                break;
-            case MD_KIND_CODE:
-                GetFNum("\pMonaco", &opStyle.tsFont);
-                TESetStyle(doFont, &opStyle, true, gHiddenTE);
-                break;
-            case MD_KIND_LINK:
-                opStyle.tsFace = underline;
-                opStyle.tsColor.red = gStripSpans[k].linkID;
-                opStyle.tsColor.green = 0;
-                opStyle.tsColor.blue = 0;
-                TESetStyle(doFace + doColor, &opStyle, true, gHiddenTE);
-                break;
-            case MD_KIND_HEADING:
-                opStyle.tsFace = bold;
-                opStyle.tsSize = CurrentFontSize() + (4 - gStripSpans[k].level) * 4;
-                TESetStyle(doFace + doSize, &opStyle, true, gHiddenTE);
-                break;
-        }
-    }
+    /* Base plain style plus each parsed span, mapped through the one shared
+       kind->TextStyle encoder. Whole document, no coordinate offset, no link
+       remap (the spans already carry the freshly-published global IDs). */
+    ApplySpanStyles(gHiddenTE, 0, 32767, 0, gStripSpans, spanCount, NULL);
 
     TESetSelect(0, 0, gHiddenTE);
 
@@ -328,7 +421,7 @@ static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
         it = (st.tsFace & italic) != 0;
         cd = (st.tsFont == monacoFont);
         lk = (st.tsFace & underline) != 0;
-        id = st.tsColor.red;
+        id = GetLinkID(&st);
 
         if (n > 0 && runs[n - 1].bold == b && runs[n - 1].italic == it &&
             runs[n - 1].code == cd && runs[n - 1].link == lk) {
@@ -396,7 +489,7 @@ void SyncHiddenToCanonical(void)
     }
     outLen = 0;
 
-    GetFNum("\pMonaco", &monacoFont);
+    monacoFont = MonacoFont();
     SnapshotLinkTable();
 
     HLock(srcH);
@@ -417,15 +510,8 @@ void SyncHiddenToCanonical(void)
 
             TEGetStyle((short) lineStart, &firstStyle, &dummyLH, &dummyFA, gHiddenTE);
             if (firstStyle.tsFace & bold) {
-                short lvl;
-
-                for (lvl = 1; lvl <= 3; lvl++) {
-                    if (firstStyle.tsSize == CurrentFontSize() + (4 - lvl) * 4) {
-                        headingLevel = lvl;
-                        isHeading = true;
-                        break;
-                    }
-                }
+                headingLevel = HeadingLevelForSize(firstStyle.tsSize);
+                isHeading = (headingLevel > 0);
             }
         }
 
@@ -514,7 +600,7 @@ Handle EncodeSelectionAsMarkdown(short start, short end, TEHandle te)
     if (outH == NULL)
         return NULL;
 
-    GetFNum("\pMonaco", &monacoFont);
+    monacoFont = MonacoFont();
     SnapshotLinkTable();
     runCount = BuildStyleRuns(te, start, end, monacoFont, gEmitRuns, MD_MAX_SPANS);
 
@@ -537,8 +623,6 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
     short remap[MD_MAX_LINKS + 1];
     short insertStart;
     short k;
-    TextStyle baseStyle;
-    short fontNum;
     MdStripOpts opts;
     Boolean droppedLink = false;
 
@@ -577,45 +661,13 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
     HUnlock(outH);
     DisposeHandle(outH);
 
-    /* TEInsert's new text inherits whatever style was at the
-       insertion point -- normalize the whole pasted range to plain
-       before applying the specific ops parsed above, the same order
-       BuildHiddenView uses for the same reason. */
-    GetFNum("\pTimes", &fontNum);
-    baseStyle.tsFont = fontNum;
-    baseStyle.tsFace = normal;
-    baseStyle.tsSize = CurrentFontSize();
-    baseStyle.tsColor.red = baseStyle.tsColor.green = baseStyle.tsColor.blue = 0;
-    TESetSelect(insertStart, (short) (insertStart + outLen), te);
-    TESetStyle(doFont + doFace + doSize + doColor, &baseStyle, true, te);
-
-    for (k = 0; k < spanCount; k++) {
-        TextStyle opStyle;
-
-        TESetSelect((short) (insertStart + gStripSpans[k].start),
-                    (short) (insertStart + gStripSpans[k].end), te);
-        switch (gStripSpans[k].kind) {
-            case MD_KIND_BOLD:
-                opStyle.tsFace = bold;
-                TESetStyle(doFace, &opStyle, true, te);
-                break;
-            case MD_KIND_ITALIC:
-                opStyle.tsFace = italic;
-                TESetStyle(doFace, &opStyle, true, te);
-                break;
-            case MD_KIND_CODE:
-                GetFNum("\pMonaco", &opStyle.tsFont);
-                TESetStyle(doFont, &opStyle, true, te);
-                break;
-            case MD_KIND_LINK:
-                opStyle.tsFace = underline;
-                opStyle.tsColor.red = remap[gStripSpans[k].linkID];
-                opStyle.tsColor.green = 0;
-                opStyle.tsColor.blue = 0;
-                TESetStyle(doFace + doColor, &opStyle, true, te);
-                break;
-        }
-    }
+    /* TEInsert's new text inherits whatever style was at the insertion point
+       -- ApplySpanStyles normalizes the whole pasted range to plain first,
+       then paints the parsed spans, shifting them into place by insertStart
+       and remapping each local link ID to its global one. No heading spans
+       occur here (paste is inline-only, headingMode OFF). */
+    ApplySpanStyles(te, insertStart, (short) (insertStart + outLen), insertStart,
+                    gStripSpans, spanCount, remap);
 
     TESetSelect((short) (insertStart + outLen), (short) (insertStart + outLen), te);
 
@@ -931,9 +983,7 @@ void DoLinkHidden(void)
             return;
         }
         ts.tsFace = underline;
-        ts.tsColor.red = id;
-        ts.tsColor.green = 0;
-        ts.tsColor.blue = 0;
+        SetLinkID(&ts, id);
         TESetStyle(doFace + doColor, &ts, true, gHiddenTE);
     }
 }
@@ -944,8 +994,8 @@ void ToggleCode(void)
     short lh, fa;
     short monacoFont, timesFont;
 
-    GetFNum("\pMonaco", &monacoFont);
-    GetFNum("\pTimes", &timesFont);
+    monacoFont = MonacoFont();
+    timesFont = TimesFont();
 
     TEGetStyle((**gHiddenTE).selStart, &ts, &lh, &fa, gHiddenTE);
     ts.tsFont = (ts.tsFont == monacoFont) ? timesFont : monacoFont;
@@ -976,7 +1026,7 @@ void ToggleHeadingHidden(short level)
     HUnlock(textH);
 
     TEGetStyle((short) lineStart, &ts, &lh, &fa, gHiddenTE);
-    isThisLevel = (ts.tsFace & bold) && (ts.tsSize == CurrentFontSize() + (4 - level) * 4);
+    isThisLevel = (ts.tsFace & bold) && (ts.tsSize == HeadingSizeForLevel(level));
 
     TESetSelect((short) lineStart, (short) lineEnd, gHiddenTE);
     if (isThisLevel) {
@@ -984,7 +1034,7 @@ void ToggleHeadingHidden(short level)
         ts.tsSize = CurrentFontSize();
     } else {
         ts.tsFace = bold;
-        ts.tsSize = CurrentFontSize() + (4 - level) * 4;
+        ts.tsSize = HeadingSizeForLevel(level);
     }
     TESetStyle(doFace + doSize, &ts, true, gHiddenTE);
 }
@@ -1000,7 +1050,7 @@ static void SetTypingStyleNormal(short pos)
     TextStyle ts;
     short fontNum;
 
-    GetFNum("\pTimes", &fontNum);
+    fontNum = TimesFont();
     ts.tsFont = fontNum;
     ts.tsFace = normal;
     ts.tsSize = CurrentFontSize();
@@ -1055,34 +1105,19 @@ void DetectInlineMarkdown(char justTyped)
     }
 
     TESetSelect((short) e.styleStart, (short) e.styleEnd, gHiddenTE);
-    switch (e.kind) {
-    case MD_KIND_HEADING:
-        ts.tsFace = bold;
-        ts.tsSize = CurrentFontSize() + (4 - e.level) * 4;
-        TESetStyle(doFace + doSize, &ts, true, gHiddenTE);
-        break;
-    case MD_KIND_BOLD:
-        ts.tsFace = bold;
-        TESetStyle(doFace, &ts, true, gHiddenTE);
-        break;
-    case MD_KIND_ITALIC:
-        ts.tsFace = italic;
-        TESetStyle(doFace, &ts, true, gHiddenTE);
-        break;
-    case MD_KIND_CODE:
-        GetFNum("\pMonaco", &ts.tsFont);
-        TESetStyle(doFont, &ts, true, gHiddenTE);
-        break;
-    case MD_KIND_LINK:
-        /* CompactLinkTable preserves the selection we just set above, so
-           it is safe to reclaim room here before claiming an ID. */
-        EnsureLinkRoom();
-        ts.tsFace = underline;
-        ts.tsColor.red = AddLinkURL(e.linkURL);
-        ts.tsColor.green = 0;
-        ts.tsColor.blue = 0;
-        TESetStyle(doFace + doColor, &ts, true, gHiddenTE);
-        break;
+    {
+        short mode;
+        short linkID = 0;
+
+        if (e.kind == MD_KIND_LINK) {
+            /* CompactLinkTable preserves the selection we just set above, so
+               it is safe to reclaim room here before claiming an ID. */
+            EnsureLinkRoom();
+            linkID = AddLinkURL(e.linkURL);
+        }
+        StyleForKind(e.kind, e.level, linkID, &ts, &mode);
+        if (mode != 0)
+            TESetStyle(mode, &ts, true, gHiddenTE);
     }
 
     if (e.resetNormal)
@@ -1100,7 +1135,7 @@ void ClearSelectionStyleHidden(void)
     if ((**gHiddenTE).selStart == (**gHiddenTE).selEnd)
         return;
 
-    GetFNum("\pTimes", &fontNum);
+    fontNum = TimesFont();
     ts.tsFont = fontNum;
     ts.tsFace = normal;
     ts.tsSize = CurrentFontSize();
