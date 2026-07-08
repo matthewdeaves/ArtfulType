@@ -4,18 +4,43 @@ A distraction-free Markdown writing app for classic 68k Macintosh computers (Sys
 
 ![ArtfulType running in Writer mode](screenshot1.png)
 
+> **This is a fork.** ArtfulType was created by **Action Retro (Sean Malseed)** — the original lives at **[ActionRetro/ArtfulType](https://github.com/ActionRetro/ArtfulType)**. This fork keeps the original's spirit and adds real strikethrough and nested inline styles, printing, a pure host-tested engine gated by CI, restored System 6 support, and a from-scratch bootable-disk build. See [**What this fork adds**](#what-this-fork-adds) for the full list. The *ArtfulType* name, icon, and artwork remain © Sean Malseed (Action Retro) and are **not** covered by the code's GPLv3 license — see [ASSETS_LICENSE](ASSETS_LICENSE).
+
 ## Features
 
 - **Writer mode** — live Markdown-to-rich-text formatting as you type (bold, italic, code, strikethrough, headings, links)
 - **Combine styles** — bold, italic, code, strikethrough and links nest freely (e.g. a struck bold word, or a bold link) and survive round-tripping between Writer and Markdown mode
 - **Markdown mode** — plain raw-syntax editing
 - Links: type `[text](url)` inline, or select text and use Style → Link
+- **Print** — Page Setup and Print through the classic Printing Manager (works on System 6 and System 7)
 - Cut/Copy/Paste and multi-level Undo/Redo, with standard keyboard shortcuts
 - Adjustable zoom, remembered between launches
 - Save/Open plain Markdown files via the classic File Manager
 - A well-behaved classic app: About and desk accessories in the Apple menu, MultiFinder-friendly (dims quietly in the background), zoom preference stored in the system Preferences folder
 
 Video overview: [Artful Type demo](https://youtu.be/HEheu_r9UGw)
+
+## What this fork adds
+
+Everything below is new relative to the [upstream project](https://github.com/ActionRetro/ArtfulType); the app's design and branding are unchanged.
+
+**Editing & rendering**
+- Real **strikethrough** (`~~text~~`) drawn in Writer mode, and inline styles that **nest and combine** — a struck bold word, a bold link, `***bold italic***` — all round-tripping losslessly between Writer and Markdown modes.
+- **Printing**: Page Setup and Print via the classic Printing Manager, one code path on System 6 and System 7, with correct pagination across variable-height headings.
+
+**Correctness & engineering**
+- A pure, Toolbox-free core engine (**`mdcore`**) — the Markdown strip / emit / live-detect / paginate logic — extracted behind a **host unit-test harness** and gated by **CI** (host tests, `cppcheck`, and a real 68k build).
+- Hardened Memory Manager usage, a guarded 32K TextEdit limit that stops silent save failures, and reclaimed link IDs so long sessions don't exhaust the table.
+- Ported to Apple's **MPW/Universal interfaces**.
+
+**Compatibility & citizenship**
+- Runs again on **System 6** on real hardware (a Mac SE): System 7-only traps are gated behind a runtime version check.
+- A well-behaved **System 7 / MultiFinder** citizen — standard system menu bar, hides quietly when suspended, zoom preference stored in the Preferences folder — with standard keyboard handling in the link dialog.
+
+**Distribution & tooling**
+- **Bootable disk images built from scratch on Linux** — no Mac required — formatted and *blessed* in software: an 800K floppy (raw + DiskCopy 4.2), a 20 MB volume, and a BlueSCSI/PiSCSI `.hda`.
+- A **tag-triggered release workflow** that builds and publishes every image automatically.
+- A **[floppy-writer tool](tools/floppy-writer/)** that writes a bootable ArtfulType floppy on a bare Mac (e.g. a Mac SE with only a System), plus a per-file custom icon so the app shows its icon without a Desktop database.
 
 ## Getting Started
 
@@ -31,6 +56,8 @@ Every disk image on the [releases page](https://github.com/matthewdeaves/ArtfulT
 Write a bootable 800K floppy and boot from it directly — no BlueSCSI required. Two forms of the same floppy are provided:
 - `ArtfulType-800K.dsk` — a raw disk image, for a flux-level floppy writer (Greaseweazle, FluxEngine, Applesauce).
 - `ArtfulType-800K.image` — the same floppy in DiskCopy 4.2 format, to write from **Disk Copy 4.2** on any working Mac.
+
+If all you have is a bare Mac with a System and the [Retro68](https://github.com/autc04/Retro68) app launcher, the [`tools/floppy-writer`](tools/floppy-writer/) app can write the floppy for you — it carries the 800K image inside itself and writes it to an inserted disk.
 
 ### In an emulator (Mini vMac)
 
@@ -63,7 +90,9 @@ Saved files are plain `.md` text, editable in any text editor.
 
 ## Building
 
-Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compiler for classic Mac OS. See [`app/CMakeLists.txt`](app/CMakeLists.txt) for the build configuration.
+Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compiler for classic Mac OS. This fork compiles against **Apple's MPW/Universal interfaces** (the real Apple headers), so it needs a Retro68 built with those rather than the stock open-source *multiversal* interfaces; CI uses a container image that ships them. See [`app/CMakeLists.txt`](app/CMakeLists.txt) for the build configuration and [`CLAUDE.md`](CLAUDE.md) for the toolchain notes.
+
+Host unit tests for the pure core run anywhere with a native C compiler: `make -C tests check`.
 
 ### Disk images
 
@@ -75,9 +104,9 @@ Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compi
 
 ## License
 
-Code: GPLv3 — see [LICENSE](LICENSE).
+Code: GPLv3 — see [LICENSE](LICENSE). This fork inherits the upstream project's GPLv3 license.
 
-Creative assets (the ArtfulType name/branding, icon, and artwork): all rights reserved — see [ASSETS_LICENSE](ASSETS_LICENSE).
+Creative assets (the ArtfulType name/branding, icon, and artwork): all rights reserved by Sean Malseed (Action Retro) — see [ASSETS_LICENSE](ASSETS_LICENSE). These are **not** covered by the GPLv3 and are not relicensed by this fork.
 
 ## AI Disclaimer
 
