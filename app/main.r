@@ -83,6 +83,25 @@ resource 'DLOG' (133) {
     noAutoCenter
 };
 
+resource 'DITL' (134) {
+    {
+        {80, 210, 100, 290}, Button { enabled, "OK" },
+        {12, 20, 68, 290}, StaticText { disabled, "^0" }
+    }
+};
+
+resource 'ALRT' (134) {
+    {100, 100, 220, 400},
+    134,
+    {
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1,
+        OK, visible, sound1
+    },
+    alertPositionMainScreen
+};
+
 resource 'ICN#' (128) {
     {
         $"00000000000000000000000000000000"

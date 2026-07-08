@@ -23,6 +23,7 @@
 #define MENU_BAR_HEIGHT 20
 #define FONT_SIZE 18
 #define SCROLLBAR_WIDTH 16
+#define kBackspaceKey 0x08
 
 #define mFile    128
 #define iNew     1
@@ -69,6 +70,8 @@
 #define iAboutOK     1
 #define iAboutTitle  2
 
+#define kErrorAlert  134
+
 #define mView        130
 #define iMarkdownView 1
 #define iWriterView  2
@@ -80,6 +83,20 @@
 #define iAbout   1
 
 #define MAX_STYLE_OPS 512
+
+/*
+    The active document is bounded to this many characters. TextEdit's hard
+    limit is 32767 bytes and TEInsert does not enforce it -- the caller must
+    (Inside Macintosh -- Text, Listing 2-8: kMaxTELength). This bound is on
+    the *visible* buffer; switching to Markdown mode re-adds delimiter
+    characters (#, **, `, [](), ...), so the canonical text is somewhat
+    longer. 20000 leaves generous headroom for that delimiter overhead so a
+    realistic prose document stays within TextEdit's limit through a save or
+    mode-switch round-trip. (A pathologically over-styled document -- many
+    thousands of single-character styled runs -- is not fully covered; noted
+    as a known limitation.)
+*/
+#define kMaxTELength 20000L
 
 #define kNumZoomLevels 5
 #define kZoomBaselineIndex 2
@@ -198,6 +215,8 @@ void DoZoom(short direction);
 void DoZoomReset(void);
 
 /* file.c */
+void ShowError(StringPtr msg);
+Boolean DocCanGrowBy(TEHandle te, long addLen);
 void SetViewMode(Boolean hideMarkdown);
 void DoStartupOpen(void);
 Boolean DoSaveAs(void);

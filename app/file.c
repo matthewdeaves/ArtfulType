@@ -1,5 +1,24 @@
 #include "app.h"
 
+/* Presents a one-button error alert with `msg` (a Pascal string) as its
+   text. Restores the arrow cursor first, in case a watch cursor was up
+   when the failure occurred. */
+void ShowError(StringPtr msg)
+{
+    ParamText(msg, "\p", "\p", "\p");
+    InitCursor();
+    Alert(kErrorAlert, NULL);
+    UpdateMenuBarLook();
+}
+
+/* True if inserting addLen characters (replacing the current selection)
+   would keep the document within kMaxTELength. See app.h. */
+Boolean DocCanGrowBy(TEHandle te, long addLen)
+{
+    long selLen = (long) (**te).selEnd - (long) (**te).selStart;
+    return (Boolean) ((long) (**te).teLength - selLen + addLen <= kMaxTELength);
+}
+
 static void RefreshActiveView(void)
 {
     if (gHideMarkdown)
@@ -34,28 +53,50 @@ void SetViewMode(Boolean hideMarkdown)
     InvalRect(&gWindow->portRect);
 }
 
-static void WriteFile(StringPtr name, short vRefNum)
+/* Writes gTE's canonical text to disk, returning the first OSErr that
+   occurs (noErr on success). Every File Manager call is checked so callers
+   can report failure instead of silently losing data. */
+static OSErr WriteFile(StringPtr name, short vRefNum)
 {
     short refNum;
     long count;
     Handle textH = (**gTE).hText;
     OSErr err;
+    OSErr closeErr;
 
+    /* Create fails harmlessly with dupFNErr if the file already exists; a
+       real problem (locked/full volume) surfaces at FSOpen below. */
     Create(name, vRefNum, 'ArtT', 'TEXT');
 
     err = FSOpen(name, vRefNum, &refNum);
     if (err != noErr)
-        return;
+        return err;
 
-    SetEOF(refNum, 0);
     count = (**gTE).teLength;
     HLock(textH);
-    FSWrite(refNum, &count, *textH);
+    err = FSWrite(refNum, &count, *textH);
     HUnlock(textH);
-    FSClose(refNum);
+
+    /* Trim any leftover tail from a previously longer version, but only
+       after a successful write -- the old code truncated to 0 up front,
+       destroying the prior contents even when the write then failed. */
+    if (err == noErr)
+        err = SetEOF(refNum, count);
+
+    closeErr = FSClose(refNum);
+    if (err == noErr)
+        err = closeErr;
+    if (err == noErr)
+        err = FlushVol(NULL, vRefNum);
+
+    return err;
 }
 
-static void ReadFile(StringPtr name, short vRefNum)
+/* Loads a file into gTE, returning true on success. On any failure the
+   document is left untouched and false is returned, so callers must not
+   commit gFileName/gVRefNum/gHaveFile until this succeeds -- otherwise a
+   later Save would overwrite the file that was just refused. */
+static Boolean ReadFile(StringPtr name, short vRefNum)
 {
     short refNum;
     long count;
@@ -65,13 +106,18 @@ static void ReadFile(StringPtr name, short vRefNum)
 
     err = FSOpen(name, vRefNum, &refNum);
     if (err != noErr)
-        return;
+        return false;
 
     GetEOF(refNum, &eof);
+    if (eof > kMaxTELength) {
+        FSClose(refNum);
+        ShowError("\pThis document is too large to open in ArtfulType.");
+        return false;
+    }
     textH = NewHandle(eof);
     if (textH == NULL) {
         FSClose(refNum);
-        return;
+        return false;
     }
     HLock(textH);
     count = eof;
@@ -90,6 +136,7 @@ static void ReadFile(StringPtr name, short vRefNum)
     RefreshActiveView();
     AdjustScrollbar();
     InvalRect(&gWindow->portRect);
+    return true;
 }
 
 void DoStartupOpen(void)
@@ -102,10 +149,11 @@ void DoStartupOpen(void)
         return;
 
     GetAppFiles(1, &theFile);
-    BlockMove(theFile.fName, gFileName, theFile.fName[0] + 1);
-    gVRefNum = theFile.vRefNum;
-    gHaveFile = true;
-    ReadFile(gFileName, gVRefNum);
+    if (ReadFile(theFile.fName, theFile.vRefNum)) {
+        BlockMove(theFile.fName, gFileName, theFile.fName[0] + 1);
+        gVRefNum = theFile.vRefNum;
+        gHaveFile = true;
+    }
     ClrAppFiles(1);
 }
 
@@ -125,7 +173,10 @@ Boolean DoSaveAs(void)
     BlockMove(reply.fName, gFileName, reply.fName[0] + 1);
     gVRefNum = reply.vRefNum;
     gHaveFile = true;
-    WriteFile(gFileName, gVRefNum);
+    if (WriteFile(gFileName, gVRefNum) != noErr) {
+        ShowError("\pThe document could not be saved.");
+        return false;
+    }
     gDirty = false;
     return true;
 }
@@ -138,7 +189,10 @@ Boolean DoSave(void)
     if (gHideMarkdown)
         SyncHiddenToCanonical();
 
-    WriteFile(gFileName, gVRefNum);
+    if (WriteFile(gFileName, gVRefNum) != noErr) {
+        ShowError("\pThe document could not be saved.");
+        return false;
+    }
     gDirty = false;
     return true;
 }
@@ -182,10 +236,11 @@ Boolean DoOpenFile(void)
     if (!reply.good)
         return false;
 
+    if (!ReadFile(reply.fName, reply.vRefNum))
+        return false;
     BlockMove(reply.fName, gFileName, reply.fName[0] + 1);
     gVRefNum = reply.vRefNum;
     gHaveFile = true;
-    ReadFile(gFileName, gVRefNum);
     return true;
 }
 
