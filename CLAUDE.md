@@ -87,7 +87,19 @@ mdcore, and maps spans onto real `TextStyle` runs.
   `FindFolder` + a small resource file, opens read-only to *load* (works on a
   locked volume) and read/write to *save*, and saves/restores `CurResFile()`
   around every access so the app's own fork stays current for other `GetResource`
-  callers.
+  callers. `FindFolder` and the FSSpec calls are System 7 only, so `OpenPrefsFile`
+  bails via `HasSystem7()` on System 6 — the zoom simply doesn't persist there.
+
+- **System 7-only traps crash the System 6 targets — gate them on `HasSystem7()`.**
+  The Mac SE runs System 6.0.8, and on a 68000 an unimplemented A-line trap is not
+  a no-op: it drops into the debugger. `FindFolder`, the FSSpec resource calls
+  (`FSMakeFSSpec` / `FSpCreateResFile` / `FSpOpenResFile`), and
+  `SetDialogDefaultItem` / `SetDialogCancelItem` are all System 7 additions and were
+  a real startup crash on a real Mac SE until gated. `HasSystem7()` (`main.c`, via
+  `SysEnvirons` — itself safe back to System 4.1) is the gate. The host tests and
+  the 68k build are both System-version-blind, so **only real System 6 hardware
+  catches this** — prefer a System-6-safe call (`SFGetFile`/`SFPutFile`, not
+  `StandardGetFile`) whenever one exists.
 
 - **`SIZE` resource (-1) makes the app a MultiFinder citizen.** It sets the memory
   partition and `acceptSuspendResumeEvents`; the `osEvt` handler then dims the
