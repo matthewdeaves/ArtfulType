@@ -1,0 +1,101 @@
+# Release automation for ArtfulType.
+#
+# Triggered by pushing a version tag (e.g. `v0.1.3-alpha`). It builds the
+# shipping 68k application and a DiskCopy 4.2 app floppy, then publishes a
+# GitHub release with both attached. Everything here runs on Linux and needs
+# no Apple system software:
+#
+#   * ArtfulType.bin          -- the MacBinary application itself.
+#   * ArtfulType-800K.image   -- a DiskCopy 4.2 floppy holding the app plus
+#                                the START_HERE guide, for transfer to a
+#                                running Mac. NON-bootable by design.
+#
+# What is deliberately NOT here: the bootable BlueSCSI .hda / 20 MB images.
+# Those require a base volume containing Apple System software fed through
+# djjr (a macOS/Windows tool), neither of which a CI runner can supply. Build
+# those on a Mac with your own System volume; see build-bluescsi-image.sh.
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  # Allow a dry run against the current default branch without tagging.
+  workflow_dispatch:
+
+permissions:
+  contents: write        # required to create the release
+
+jobs:
+  build:
+    name: Build app + floppy
+    runs-on: ubuntu-latest
+    # Official Retro68 image: ships the multiversal interfaces, the m68k
+    # toolchain, and the hfsutils (hformat/hmount/hcopy) used below.
+    container: ghcr.io/autc04/retro68
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the 68k application
+        run: |
+          cmake -S app -B app/build \
+            -DCMAKE_TOOLCHAIN_FILE=/Retro68-build/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake
+          cmake --build app/build
+          test -f app/build/ArtfulType.bin
+
+      - name: Build the DiskCopy app floppy
+        run: |
+          set -eu
+          export PATH="/Retro68-build/toolchain/bin:$PATH"
+          # Fall back to the distro packages if the toolchain layout differs.
+          command -v hformat >/dev/null 2>&1 || { apt-get update && apt-get install -y hfsutils; }
+          command -v python3 >/dev/null 2>&1 || { apt-get update && apt-get install -y python3; }
+
+          RAW=ArtfulType-800K.dsk
+          WRAPPED=ArtfulType-800K.image
+          # 800 KiB HFS floppy: blank-format, drop the app + guide on, wrap.
+          dd if=/dev/zero of="$RAW" bs=1024 count=800
+          hformat -l "The Artful Type" "$RAW"
+          hmount "$RAW"
+          hcopy -m app/build/ArtfulType.bin :ArtfulType
+          hcopy -t doc/START_HERE.md :START_HERE.md
+          hattrib -t TEXT -c ArtT :START_HERE.md
+          hdir
+          humount
+          python3 make_diskcopy_image.py "$RAW" "$WRAPPED" "The Artful Type"
+
+          mkdir -p out
+          cp app/build/ArtfulType.bin "out/ArtfulType.bin"
+          cp "$WRAPPED" "out/ArtfulType-800K.image"
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: out/
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: out
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            Distraction-free Markdown editor for classic 68k Macs (System 6/7).
+
+            **Attached**
+            - `ArtfulType.bin` — the application (MacBinary).
+            - `ArtfulType-800K.image` — a DiskCopy 4.2 floppy with the app + START_HERE guide, for transfer to a running Mac (not bootable).
+
+            Bootable BlueSCSI / 20 MB disk images are built separately on a Mac
+            with your own System volume (see `build-bluescsi-image.sh`), since
+            they require Apple system software a CI runner can't provide.
