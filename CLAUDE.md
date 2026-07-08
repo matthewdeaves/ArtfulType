@@ -139,12 +139,31 @@ mdcore, and maps spans onto real `TextStyle` runs.
 
 ## Peripheral tooling (deploy / packaging)
 
-- `deploy.sh` — builds and copies `ArtfulType.bin` + the guide onto the 20 MB and
-  800 K test images (via `hmount`/`hcopy` from hfsutils); wraps the floppy in a
-  DiskCopy 4.2 header (`make_diskcopy_image.py`).
-- `build-bluescsi-image.sh` — converts the 20 MB volume to a BlueSCSI device image
-  (partition map + driver) with `djjr`.
-- `package-release.sh` — runs both, then stages release-named images in `Disks/`.
+- `build-boot-images.sh` — the primary, **hermetic** disk builder: produces every
+  bootable image (800K floppy, 20 MB volume, `HD1_*.hda`) from scratch on Linux
+  with no Mac. `release.yml` runs it, so `git tag vX.Y.Z && git push --tags`
+  builds and publishes the whole release. Needs `hfsutils`, `djjr`, `python3`.
+- `deploy.sh` — older path: copies `ArtfulType.bin` + the guide onto *pre-built*
+  20 MB and 800 K base images under `vmac/` (a fast Mini vMac test loop); wraps
+  the floppy in a DiskCopy 4.2 header (`make_diskcopy_image.py`).
+- `build-bluescsi-image.sh` — converts a 20 MB `vmac/` volume to a BlueSCSI device
+  image with `djjr`. `package-release.sh` runs deploy + this, staging into `Disks/`.
 
-These operate on disk images under `vmac/` (git-ignored) and expect `hfsutils`,
-`djjr`, and `python3` on the build host.
+- **Blessing an HFS volume in software (no Mac).** `hformat` makes a mountable
+  volume but *not a bootable one*: it writes neither the boot blocks nor the
+  blessed-folder ID a ROM needs to find the System file. `tools/bless_hfs.py`
+  supplies both — it copies the 1024-byte boot blocks (`'LK'`/0x4C4B) verbatim
+  from a known-bootable System volume, and writes the System Folder's directory
+  ID into the MDB's `drFndrInfo[0]` (MDB at logical block 2 = byte 1024; the
+  field is at MDB offset 92, so byte 1116). The blessed dir ID is made
+  deterministic by creating the System Folder *first* on a fresh volume, where
+  the next catalog node ID is always 16 (asserted from `drNxtCNID`, MDB offset
+  30). `hcd :` does **not** return to the volume root in hfsutils, so root-level
+  files are copied while cwd is still root, before descending into the folder.
+  The committed System 6.0.8 base lives in `disk-base/` (git-ignored `*.dsk`
+  except that one file). djjr reports a raw volume as `(bootable)` off the boot
+  signature; a *device* image (`.hda`) instead prints its partition map, so
+  verify it via the wrapped `HFS Volume` line, not a `bootable` grep. The 20 MB
+  images are blessed and structurally verified on Linux but **not boot-tested**
+  there (a Quadra-class `qemu-system-m68k` can't run System 6); the 800K floppy
+  derives directly from the proven-bootable base.

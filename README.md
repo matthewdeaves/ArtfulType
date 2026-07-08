@@ -18,22 +18,23 @@ Video overview: [Artful Type demo](https://youtu.be/HEheu_r9UGw)
 
 ## Getting Started
 
-If your Mac can use [BlueSCSI](https://bluescsi.com), use the BlueSCSI image. If it can't (or you just want a physical floppy), use the 800K floppy image instead.
+Every disk image on the [releases page](https://github.com/matthewdeaves/ArtfulType/releases) boots straight into System 6.0.8 with ArtfulType on it — no separate system install needed. If your Mac can use [BlueSCSI](https://bluescsi.com), use the BlueSCSI image; if it can't (or you just want a physical floppy), use the 800K floppy image instead.
 
 ### Real hardware with BlueSCSI
 
 1. Copy `HD1_ArtfulType.hda` onto your BlueSCSI SD card — the `HD1_` prefix is BlueSCSI's naming convention for assigning an image to SCSI ID 1, so no renaming is needed. (See [BlueSCSI](https://bluescsi.com) for how to set up and image an SD card for your specific BlueSCSI hardware.)
-2. Boot the Mac. The Finder will appear as usual — double-click ArtfulType to launch it.
-3. To also write a physical 800K floppy: open `Utilities/Disk Copy 4.2` (already on the disk image), and use it to write `ArtfulType 800K` (also already on the disk image, in proper DiskCopy 4.2 format) to a blank floppy in your Mac's floppy drive.
+2. Boot the Mac. The Finder appears as usual — double-click **ArtfulType** to launch it. The 20 MB volume leaves plenty of room to save your documents.
 
 ### Real hardware without BlueSCSI
 
-Write `ArtfulType-800K.dsk` to a real 800K floppy disk and boot from it directly — no BlueSCSI required.
+Write a bootable 800K floppy and boot from it directly — no BlueSCSI required. Two forms of the same floppy are provided:
+- `ArtfulType-800K.dsk` — a raw disk image, for a flux-level floppy writer (Greaseweazle, FluxEngine, Applesauce).
+- `ArtfulType-800K.image` — the same floppy in DiskCopy 4.2 format, to write from **Disk Copy 4.2** on any working Mac.
 
 ### In an emulator (Mini vMac)
 
 For trying ArtfulType without real hardware, use [Mini vMac](https://www.gryphel.com/c/minivmac/) configured for a Mac Plus, with either:
-- `ArtfulType-20MB.dsk` — the full HD setup (System 7.1, stripped down, with the app, Disk Copy, and the embedded floppy image)
+- `ArtfulType-20MB.dsk` — a bootable 20 MB volume (System 6.0.8) with the app and room to work
 - `ArtfulType-800K.dsk` — a bootable 800K floppy (System 6.0.8) with just the app
 
 ## Usage
@@ -61,7 +62,13 @@ Saved files are plain `.md` text, editable in any text editor.
 
 ## Building
 
-Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compiler for classic Mac OS. See `app/CMakeLists.txt` for the build configuration, and `deploy.sh` / `build-bluescsi-image.sh` / `package-release.sh` for the build-to-disk-image pipeline.
+Built with [Retro68](https://github.com/autc04/Retro68), a GCC-based cross-compiler for classic Mac OS. See `app/CMakeLists.txt` for the build configuration.
+
+### Disk images
+
+`build-boot-images.sh` builds every bootable disk image from scratch on Linux — no Mac required. It formats a fresh HFS volume, installs a System Folder from the committed System 6.0.8 base (`disk-base/`), and *blesses* the volume in software (`tools/bless_hfs.py` writes the boot blocks and the blessed-folder ID that `hformat` alone doesn't). The [release workflow](.github/workflows/release.yml) runs the same script, so tagging `vX.Y.Z` builds and publishes all images automatically. It needs `hfsutils`, [`djjr`](https://diskjockey.onegeekarmy.eu/djjr/), and `python3`.
+
+`deploy.sh` / `build-bluescsi-image.sh` / `package-release.sh` are the older pipeline that deploys onto pre-built base images under `vmac/` (e.g. for a fast Mini vMac test loop); `build-boot-images.sh` supersedes them for producing release images.
 
 ## License
 
