@@ -128,7 +128,7 @@ jobs:
             - `ArtfulType-800K.dsk` / `ArtfulType-800K.image` — bootable 800K floppy (raw HFS, and the DiskCopy 4.2 form) for Mini vMac, a flux floppy writer, or Disk Copy 4.2.
 
             **Also attached:**
-            - `ArtfulType.bin` — the application on its own (MacBinary), to add to an existing System volume.
+            - `ArtfulType.bin` — the application on its own (MacBinary), to add to an existing System volume (handy under Basilisk II / SheepShaver). Decode it with Stuffit Expander, or with [binUnpk](https://www.gryphel.com/c/minivmac/extras/binunpk/) — a tiny MacBinary unpacker that ships as a plain zipped disk image, so nothing needs decoding to bootstrap it.
             - `START_HERE.md` — the getting-started guide, written in ArtfulType.
 
             The disk images are formatted and blessed in software on Linux (both
