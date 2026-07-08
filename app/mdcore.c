@@ -41,6 +41,168 @@ static void MdRecordSpan(MdSpan *spans, short spanCap, short *nSpans,
     }
 }
 
+/* Forward decl: the inline stripper and its span-content recursion are
+   mutually recursive so that a delimiter pair's content is itself stripped
+   (this is what makes inline styles nest -- see mdcore.h). */
+static long MdStripInlineAt(const char *src, long i, long end,
+                            char *out, long *outLen,
+                            MdSpan *spans, short spanCap, short *nSpans,
+                            MdLinkTable *links);
+
+/* Strips src[a..b) as inline content, appending stripped text to out and
+   recording spans, recursing into any nested delimiter pairs. */
+static void MdStripSpanContent(const char *src, long a, long b,
+                               char *out, long *outLen,
+                               MdSpan *spans, short spanCap, short *nSpans,
+                               MdLinkTable *links)
+{
+    long p = a;
+
+    while (p < b) {
+        long consumed = MdStripInlineAt(src, p, b, out, outLen,
+                                        spans, spanCap, nSpans, links);
+        if (consumed > 0) {
+            p += consumed;
+        } else {
+            out[(*outLen)++] = src[p];
+            p++;
+        }
+    }
+}
+
+/*
+    If an inline construct starts at src[i] (bounded by end), strips it --
+    appending its stripped content to out, recording the outer span (over the
+    stripped content, so it survives the recursion that strips any nested
+    inner styles), and adding its URL for a link -- and returns how many
+    SOURCE characters it consumed. Returns 0 if nothing matched at i, so the
+    caller copies src[i] literally. The match order (***, then **, then *,
+    then `, then ~~, then [..](..)) preserves the original single-level
+    parser's precedence, including the "unmatched ** is an empty italic" quirk.
+*/
+static long MdStripInlineAt(const char *src, long i, long end,
+                            char *out, long *outLen,
+                            MdSpan *spans, short spanCap, short *nSpans,
+                            MdLinkTable *links)
+{
+    /* ***bold italic***: three stars, closed by three stars. Checked before
+       ** so the triple isn't mis-read as bold + a stray star. Records BOTH a
+       bold and an italic span over the (recursively stripped) content. */
+    if (i + 2 < end && src[i] == '*' && src[i + 1] == '*' && src[i + 2] == '*') {
+        long j = i + 3;
+
+        while (j + 2 < end &&
+               !(src[j] == '*' && src[j + 1] == '*' && src[j + 2] == '*'))
+            j++;
+        if (j + 2 < end && src[j] == '*' && src[j + 1] == '*' && src[j + 2] == '*') {
+            long outStart = *outLen;
+            MdStripSpanContent(src, i + 3, j, out, outLen,
+                               spans, spanCap, nSpans, links);
+            MdRecordSpan(spans, spanCap, nSpans, outStart, *outLen,
+                         MD_KIND_BOLD, 0, 0);
+            MdRecordSpan(spans, spanCap, nSpans, outStart, *outLen,
+                         MD_KIND_ITALIC, 0, 0);
+            return (j + 3) - i;
+        }
+    }
+    if (i + 1 < end && src[i] == '*' && src[i + 1] == '*') {
+        long j = i + 2;
+
+        while (j + 1 < end && !(src[j] == '*' && src[j + 1] == '*'))
+            j++;
+        if (j + 1 < end) {
+            long outStart = *outLen;
+            MdStripSpanContent(src, i + 2, j, out, outLen,
+                               spans, spanCap, nSpans, links);
+            MdRecordSpan(spans, spanCap, nSpans, outStart, *outLen,
+                         MD_KIND_BOLD, 0, 0);
+            return (j + 2) - i;
+        }
+    }
+    if (src[i] == '*') {
+        long j = i + 1;
+
+        while (j < end && src[j] != '*')
+            j++;
+        if (j < end) {
+            long outStart = *outLen;
+            MdStripSpanContent(src, i + 1, j, out, outLen,
+                               spans, spanCap, nSpans, links);
+            MdRecordSpan(spans, spanCap, nSpans, outStart, *outLen,
+                         MD_KIND_ITALIC, 0, 0);
+            return (j + 1) - i;
+        }
+    }
+    if (src[i] == '`') {
+        long j = i + 1;
+
+        while (j < end && src[j] != '`')
+            j++;
+        if (j < end) {
+            long outStart = *outLen;
+            MdStripSpanContent(src, i + 1, j, out, outLen,
+                               spans, spanCap, nSpans, links);
+            MdRecordSpan(spans, spanCap, nSpans, outStart, *outLen,
+                         MD_KIND_CODE, 0, 0);
+            return (j + 1) - i;
+        }
+    }
+    if (i + 1 < end && src[i] == '~' && src[i + 1] == '~') {
+        long j = i + 2;
+
+        while (j + 1 < end && !(src[j] == '~' && src[j + 1] == '~'))
+            j++;
+        if (j + 1 < end) {
+            long outStart = *outLen;
+            MdStripSpanContent(src, i + 2, j, out, outLen,
+                               spans, spanCap, nSpans, links);
+            MdRecordSpan(spans, spanCap, nSpans, outStart, *outLen,
+                         MD_KIND_STRIKE, 0, 0);
+            return (j + 2) - i;
+        }
+    }
+    if (src[i] == '[') {
+        long closeBracket = i + 1;
+
+        while (closeBracket < end && src[closeBracket] != ']')
+            closeBracket++;
+        if (closeBracket < end && closeBracket + 1 < end &&
+            src[closeBracket + 1] == '(') {
+            long closeParen = closeBracket + 2;
+
+            while (closeParen < end && src[closeParen] != ')')
+                closeParen++;
+            if (closeParen < end) {
+                long urlLen = closeParen - (closeBracket + 2);
+                long outStart = *outLen;
+                short id;
+
+                /* Register the URL first so its ID is known, then strip the
+                   link text (which may itself carry nested styles) and record
+                   the LINK span over it. Guard the whole record on the span
+                   cap so a doc past the cap doesn't grow the link table for a
+                   run it can't reference (matches the original behaviour). (If
+                   the recursion exhausts the last span slots the LINK span is
+                   dropped while its URL stays registered -- a harmless orphaned
+                   table entry, only reachable in a >512-span pathological doc.) */
+                if (*nSpans < spanCap) {
+                    id = MdAddLink(links, src, closeBracket + 2, urlLen);
+                    MdStripSpanContent(src, i + 1, closeBracket, out, outLen,
+                                       spans, spanCap, nSpans, links);
+                    MdRecordSpan(spans, spanCap, nSpans, outStart, *outLen,
+                                 MD_KIND_LINK, 0, id);
+                } else {
+                    MdStripSpanContent(src, i + 1, closeBracket, out, outLen,
+                                       spans, spanCap, nSpans, links);
+                }
+                return (closeParen + 1) - i;
+            }
+        }
+    }
+
+    return 0;
+}
+
 long MdStrip(const char *src, long len, const MdStripOpts *opts,
              char *out, long outCap,
              MdSpan *spans, short spanCap, short *spanCount,
@@ -56,6 +218,8 @@ long MdStrip(const char *src, long len, const MdStripOpts *opts,
         links->count = 0;
 
     while (i < len) {
+        long consumed;
+
         /* Heading: a run of up to 3 '#' then a space, at the start of a
            line. Only when enabled, and only if src[0] is itself a line
            start (interior line starts are found via the preceding '\r'). */
@@ -69,13 +233,14 @@ long MdStrip(const char *src, long len, const MdStripOpts *opts,
                 if (opts->headingMode == MD_HEADINGS_STRIP) {
                     /* Skip only the "# " prefix; the heading body flows on
                        through the inline stripping below, so any bold/
-                       italic/code/link inside it is stripped too. Records
-                       no span (the "clear formatting" path). */
+                       italic/code/link inside it is stripped (and nested) too.
+                       Records no span (the "clear formatting" path). */
                     i = i + level + 1;
                     continue;
                 } else {
                     /* SPAN: consume the whole line verbatim and record an
-                       H span over its body (the Writer-view path). */
+                       H span over its body (the Writer-view path). Inline
+                       styles inside a heading are intentionally left literal. */
                     long lineStart = i + level + 1;
                     long lineEnd = lineStart;
                     long outStart = outLen;
@@ -90,82 +255,11 @@ long MdStrip(const char *src, long len, const MdStripOpts *opts,
             }
         }
 
-        if (i + 1 < len && src[i] == '*' && src[i + 1] == '*') {
-            long j = i + 2;
-
-            while (j + 1 < len && !(src[j] == '*' && src[j + 1] == '*'))
-                j++;
-            if (j + 1 < len) {
-                long outStart = outLen, m;
-
-                for (m = i + 2; m < j; m++)
-                    out[outLen++] = src[m];
-                MdRecordSpan(spans, spanCap, &nSpans, outStart, outLen,
-                             MD_KIND_BOLD, 0, 0);
-                i = j + 2;
-                continue;
-            }
-        }
-        if (src[i] == '*') {
-            long j = i + 1;
-
-            while (j < len && src[j] != '*')
-                j++;
-            if (j < len) {
-                long outStart = outLen, m;
-
-                for (m = i + 1; m < j; m++)
-                    out[outLen++] = src[m];
-                MdRecordSpan(spans, spanCap, &nSpans, outStart, outLen,
-                             MD_KIND_ITALIC, 0, 0);
-                i = j + 1;
-                continue;
-            }
-        }
-        if (src[i] == '`') {
-            long j = i + 1;
-
-            while (j < len && src[j] != '`')
-                j++;
-            if (j < len) {
-                long outStart = outLen, m;
-
-                for (m = i + 1; m < j; m++)
-                    out[outLen++] = src[m];
-                MdRecordSpan(spans, spanCap, &nSpans, outStart, outLen,
-                             MD_KIND_CODE, 0, 0);
-                i = j + 1;
-                continue;
-            }
-        }
-        if (src[i] == '[') {
-            long closeBracket = i + 1;
-
-            while (closeBracket < len && src[closeBracket] != ']')
-                closeBracket++;
-            if (closeBracket < len && closeBracket + 1 < len && src[closeBracket + 1] == '(') {
-                long closeParen = closeBracket + 2;
-
-                while (closeParen < len && src[closeParen] != ')')
-                    closeParen++;
-                if (closeParen < len) {
-                    long outStart = outLen, m;
-                    long urlLen = closeParen - (closeBracket + 2);
-
-                    for (m = i + 1; m < closeBracket; m++)
-                        out[outLen++] = src[m];
-                    /* Add the URL only when its span will actually be
-                       recorded, so a doc past the span cap doesn't grow the
-                       link table for runs it can't reference (matches the
-                       original AddLinkURL-inside-the-cap-guard behaviour). */
-                    if (nSpans < spanCap)
-                        MdRecordSpan(spans, spanCap, &nSpans, outStart, outLen,
-                                     MD_KIND_LINK, 0,
-                                     MdAddLink(links, src, closeBracket + 2, urlLen));
-                    i = closeParen + 1;
-                    continue;
-                }
-            }
+        consumed = MdStripInlineAt(src, i, len, out, &outLen,
+                                   spans, spanCap, &nSpans, links);
+        if (consumed > 0) {
+            i += consumed;
+            continue;
         }
 
         out[outLen++] = src[i];
@@ -176,13 +270,63 @@ long MdStrip(const char *src, long len, const MdStripOpts *opts,
     return outLen;
 }
 
+short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
+                    MdRun *runs, short cap)
+{
+    short nRuns = 0;
+    long c;
+
+    for (c = 0; c < textLen; c++) {
+        int b = 0, it = 0, cd = 0, lk = 0, sk = 0;
+        short id = 0, s;
+
+        for (s = 0; s < spanCount; s++) {
+            if (spans[s].start <= c && c < spans[s].end) {
+                switch (spans[s].kind) {
+                    case MD_KIND_BOLD:   b = 1; break;
+                    case MD_KIND_ITALIC: it = 1; break;
+                    case MD_KIND_CODE:   cd = 1; break;
+                    case MD_KIND_LINK:   lk = 1; id = spans[s].linkID; break;
+                    case MD_KIND_STRIKE: sk = 1; break;
+                    default: break;  /* MD_KIND_HEADING: line-level, ignored */
+                }
+            }
+        }
+
+        if (nRuns > 0 && runs[nRuns - 1].bold == b && runs[nRuns - 1].italic == it &&
+            runs[nRuns - 1].code == cd && runs[nRuns - 1].link == lk &&
+            runs[nRuns - 1].strike == sk && runs[nRuns - 1].linkID == id) {
+            runs[nRuns - 1].end = c + 1;
+        } else if (nRuns < cap) {
+            runs[nRuns].start = c;
+            runs[nRuns].end = c + 1;
+            runs[nRuns].bold = b;
+            runs[nRuns].italic = it;
+            runs[nRuns].code = cd;
+            runs[nRuns].link = lk;
+            runs[nRuns].strike = sk;
+            runs[nRuns].linkID = id;
+            nRuns++;
+        } else if (nRuns > 0) {
+            /* Run table full: fold the rest into the last run so no character
+               is dropped, matching BuildStyleRuns' overflow policy. With cap
+               == MD_MAX_RUNS this is unreachable (MD_MAX_SPANS spans can't make
+               more than MD_MAX_RUNS runs); the nRuns > 0 guard just keeps a
+               degenerate cap == 0 call from writing runs[-1]. */
+            runs[nRuns - 1].end = c + 1;
+        }
+    }
+
+    return nRuns;
+}
+
 long MdEmitInline(const char *src, long len,
                   const MdRun *runs, short runCount,
                   const MdLinkTable *links,
                   char *out, long outCap)
 {
     long outLen = 0;
-    int inBold = 0, inItalic = 0, inCode = 0, inLink = 0;
+    int inBold = 0, inItalic = 0, inCode = 0, inLink = 0, inStrike = 0;
     unsigned char curLinkURL[256];
     short r;
 
@@ -195,7 +339,7 @@ long MdEmitInline(const char *src, long len,
        whatever is still open at the end of the range -- the same job the
        old loop's final i == lineEnd / i == end pass did. */
     for (r = 0; r <= runCount; r++) {
-        int wantBold = 0, wantItalic = 0, wantCode = 0, wantLink = 0;
+        int wantBold = 0, wantItalic = 0, wantCode = 0, wantLink = 0, wantStrike = 0;
         short linkID = 0;
         long runStart, runEnd, p;
 
@@ -204,6 +348,7 @@ long MdEmitInline(const char *src, long len,
             wantItalic = runs[r].italic;
             wantCode = runs[r].code;
             wantLink = runs[r].link;
+            wantStrike = runs[r].strike;
             linkID = runs[r].linkID;
             runStart = runs[r].start;
             runEnd = runs[r].end;
@@ -211,14 +356,19 @@ long MdEmitInline(const char *src, long len,
             runStart = runEnd = len;
         }
 
-        /* Close innermost-first: code, italic, bold, then link (link is the
-           outermost wrapper, [bold link](url)). */
+        /* Close innermost-first: code, italic, bold, strike, then link (link
+           is the outermost wrapper, [~~bold link~~](url)). */
         if (inCode && !wantCode) { out[outLen++] = '`'; inCode = 0; }
         if (inItalic && !wantItalic) { out[outLen++] = '*'; inItalic = 0; }
         if (inBold && !wantBold) {
             out[outLen++] = '*';
             out[outLen++] = '*';
             inBold = 0;
+        }
+        if (inStrike && !wantStrike) {
+            out[outLen++] = '~';
+            out[outLen++] = '~';
+            inStrike = 0;
         }
         if (inLink && !wantLink) {
             long k;
@@ -230,7 +380,7 @@ long MdEmitInline(const char *src, long len,
             inLink = 0;
         }
 
-        /* Open outermost-first: link, bold, italic, code. */
+        /* Open outermost-first: link, strike, bold, italic, code. */
         if (!inLink && wantLink) {
             out[outLen++] = '[';
             inLink = 1;
@@ -243,6 +393,11 @@ long MdEmitInline(const char *src, long len,
             } else {
                 curLinkURL[0] = 0;
             }
+        }
+        if (!inStrike && wantStrike) {
+            out[outLen++] = '~';
+            out[outLen++] = '~';
+            inStrike = 1;
         }
         if (!inBold && wantBold) {
             out[outLen++] = '*';
@@ -426,6 +581,48 @@ MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justType
                     return e;
                 }
                 q++;
+            }
+        }
+    } else if (justTyped == '~') {
+        if (caret >= 4 && buf[caret - 2] == '~' && buf[caret - 1] == '~') {
+            long p = caret - 4;
+
+            while (p >= lineStart) {
+                if (buf[p] == '~' && buf[p + 1] == '~' && p + 2 < caret - 2) {
+                    long innerStart = p + 2;
+                    long innerEnd = caret - 2;
+
+                    e.kind = MD_KIND_STRIKE;
+                    e.del1Start = innerEnd; e.del1End = caret;
+                    e.del2Start = p;        e.del2End = innerStart;
+                    e.styleStart = p;       e.styleEnd = innerEnd - 2;
+                    e.newCaret = innerEnd - 2;
+                    e.resetNormal = 1;
+                    return e;
+                }
+                p--;
+            }
+
+            /* No opening ~~ behind the caret -- the just-typed ~~ may
+               instead be an OPENING delimiter for a closing ~~ already
+               sitting later in the line (strike typed closing-first). */
+            {
+                long q = caret + 1;
+
+                while (q + 1 < lineEnd) {
+                    if (buf[q] == '~' && buf[q + 1] == '~') {
+                        long innerEnd = q;
+
+                        e.kind = MD_KIND_STRIKE;
+                        e.del1Start = innerEnd;  e.del1End = innerEnd + 2;
+                        e.del2Start = caret - 2; e.del2End = caret;
+                        e.styleStart = caret - 2; e.styleEnd = innerEnd - 2;
+                        e.newCaret = caret - 2;
+                        e.resetNormal = 1;
+                        return e;
+                    }
+                    q++;
+                }
             }
         }
     } else if (justTyped == ')') {

@@ -225,6 +225,13 @@ void DoCut(void)
     gDirty = true;
     gTypingRunActive = false;
     AdjustScrollbar();
+
+    /* A Writer-mode cut can shift or remove a struck run; TEDelete repaints
+       the affected line as plain text, so force a content repaint to let
+       DrawStruckRuns (in the update path) restore the strike overlay --
+       mirrors DoPaste. */
+    if (gHideMarkdown)
+        InvalRect(&gWindow->portRect);
 }
 
 void DoCopy(void)
@@ -279,6 +286,11 @@ void DoPaste(void)
     gDirty = true;
     gTypingRunActive = false;
     AdjustScrollbar();
+
+    /* A Writer-mode paste can bring in struck runs; force a content repaint so
+       DrawStruckRuns (in the update path) paints their lines. */
+    if (gHideMarkdown)
+        InvalRect(&gWindow->portRect);
 }
 
 void DoSelectAll(void)

@@ -44,6 +44,81 @@ static short GetLinkID(const TextStyle *ts)
     return ts->tsColor.red;
 }
 
+/* Strikethrough has no native classic text face, so a struck run is flagged
+   in its run's tsColor.green (1 == struck) -- the exact same trick links use
+   in tsColor.red, and just as imperceptible (green == 1 out of 65535 reads as
+   black). red (link ID) and green (strike) are independent channels, so a
+   struck link keeps both. TextEdit can't draw the line itself; DrawStruckRuns
+   paints it after TextEdit lays the text down. */
+static short GetStrikeFlag(const TextStyle *ts)
+{
+    return ts->tsColor.green ? 1 : 0;
+}
+
+/* The write half of the green-channel convention (mirrors SetLinkID for red):
+   sets the strike flag to 0/1 without touching red (the link ID) or blue, so
+   a struck link keeps both channels. The one place the "green carries strike,
+   independent of red" invariant is written. */
+static void SetStrikeFlag(TextStyle *ts, short on)
+{
+    ts->tsColor.green = on ? 1 : 0;
+}
+
+/*
+    Fast-path guard for DrawStruckRuns. That routine sweeps every visible
+    character (TEGetStyle per char) after every keystroke and update, which is
+    real, avoidable latency on an 8 MHz 68000 for the overwhelmingly common
+    document that has no strikethrough at all. This flag is set true wherever a
+    struck run can come into being, and recomputed from scratch on every
+    BuildHiddenView (which clears it, then ApplySpanStyles re-sets it iff the
+    rebuilt view actually contains strike). It is only ever set false there, so
+    it can never hide a real struck run (at worst it over-reports after all
+    strike is removed, reverting to today's always-sweep until the next
+    rebuild). DrawStruckRuns early-outs when it is false. */
+static Boolean gDocHasStrike = false;
+
+/*
+    Sets (on != 0) or clears the strike flag over te[from,to), preserving each
+    run's link ID -- strike and link share tsColor but own separate channels,
+    and TESetStyle writes the whole colour, so the flag can only be flipped by
+    reading each run's colour first. Walks maximal (strike,link) runs like
+    CompactLinkTable so one TESetStyle covers each. redraw is false: the flag
+    is invisible, and the visible line is (re)painted by DrawStruckRuns / the
+    update cycle, never by this.
+*/
+static void SetStrikeRange(TEHandle te, long from, long to, short on)
+{
+    long i = from;
+    short want = on ? 1 : 0;
+
+    while (i < to) {
+        TextStyle st;
+        short lh, fa;
+        long runEnd;
+
+        TEGetStyle((short) i, &st, &lh, &fa, te);
+        runEnd = i + 1;
+        while (runEnd < to) {
+            TextStyle st2;
+            short lh2, fa2;
+
+            TEGetStyle((short) runEnd, &st2, &lh2, &fa2, te);
+            if (GetStrikeFlag(&st2) != GetStrikeFlag(&st) ||
+                st2.tsColor.red != st.tsColor.red)
+                break;
+            runEnd++;
+        }
+        if (GetStrikeFlag(&st) != want) {
+            SetStrikeFlag(&st, want);
+            if (want)
+                gDocHasStrike = true;
+            TESetSelect((short) i, (short) runEnd, te);
+            TESetStyle(doColor, &st, false, te);
+        }
+        i = runEnd;
+    }
+}
+
 /* A level-N heading (N == 1..3) renders as bold at this size -- larger N is
    smaller. HeadingLevelForSize is the exact inverse (0 == not a heading size),
    so the Writer<->Markdown round-trip stays lossless. Keep the two paired. */
@@ -92,43 +167,103 @@ static void StyleForKind(short kind, short level, short linkID,
         *mode = doFace + doSize;
         break;
     default:
+        /* MD_KIND_STRIKE lands here: it can't be a plain TESetStyle because
+           it shares tsColor with links and must preserve the link ID, so
+           callers apply it with SetStrikeRange instead. mode 0 == "nothing
+           to set here", which the span loops already skip. */
         *mode = 0;
         break;
     }
 }
 
+/* Scratch buffers for the pure strip pass (mdcore's MdStrip), shared by the
+   non-reentrant BuildHiddenView / InsertMarkdownAsStyled /
+   ClearMarkdownInSelection adapters -- kept at file scope so they stay off
+   the small classic-Mac stack. */
+static MdSpan gStripSpans[MD_MAX_SPANS];
+static MdLinkTable gStripLinks;
+
+/* Scratch for the run-based directions: the coalesced style runs of the range
+   being encoded (emit) or applied (build), and a snapshot of the global link
+   table in mdcore's own layout. Shared by the non-reentrant
+   SyncHiddenToCanonical / EncodeSelectionAsMarkdown (emit) and ApplySpanStyles
+   (build) adapters -- none of which run concurrently, so the one buffer is
+   safe to alias between them. Sized to MD_MAX_RUNS (not MD_MAX_SPANS): the
+   build side flattens up to MD_MAX_SPANS disjoint spans, which can be 2N+1
+   runs, so a smaller buffer would fold the document's tail into one style. */
+static MdRun gEmitRuns[MD_MAX_RUNS];
+static MdLinkTable gEmitLinks;
+
 /*
-    Normalizes te[from,to) to the base (plain Times) style, then paints each
-    span's style onto te, shifting span coordinates by `offset` and remapping
-    link IDs through `remap` (NULL == use the span's own linkID). Shared by
-    BuildHiddenView (whole document, no offset, no remap) and
+    Paints the styled runs MdStrip found onto te[offset, offset+textLen).
+    `spans` are in stripped-text coordinates [0, textLen) and MAY OVERLAP
+    (nested inline styles -- see mdcore.h), so they're first flattened by the
+    pure MdSpansToRuns into non-overlapping, multi-attribute runs; each run
+    then gets ONE combined TextStyle. That single combined write is what makes
+    nesting render: a bold+strike run carries bold in tsFace and strike in
+    tsColor.green together, where the old span-at-a-time approach would let a
+    later span's face clobber an earlier one. link IDs are remapped through
+    `remap` (NULL == use the run's own ID). Headings are line-level (never
+    nested inside inline styles) and applied as a final pass over their spans.
+    Shared by BuildHiddenView (whole document, offset 0, no remap) and
     InsertMarkdownAsStyled (the pasted range, offset and remapped).
+
+    Reuses gEmitRuns as run scratch: the emit direction that owns it never runs
+    concurrently with a build/paste, and keeping one 512-run buffer off the
+    tiny classic-Mac stack matters more than the aliasing.
 */
-static void ApplySpanStyles(TEHandle te, short from, short to, short offset,
+static void ApplySpanStyles(TEHandle te, short offset, long textLen,
                             const MdSpan *spans, short count, const short *remap)
 {
     TextStyle base;
-    short fontNum;
-    short k;
+    short timesFont, monacoFont;
+    short nRuns, r, k;
 
-    fontNum = TimesFont();
-    base.tsFont = fontNum;
+    timesFont = TimesFont();
+    monacoFont = MonacoFont();
+
+    base.tsFont = timesFont;
     base.tsFace = normal;
     base.tsSize = CurrentFontSize();
     base.tsColor.red = base.tsColor.green = base.tsColor.blue = 0;
-    TESetSelect(from, to, te);
+    TESetSelect(offset, (short) (offset + textLen), te);
     TESetStyle(doFont + doFace + doSize + doColor, &base, true, te);
 
-    for (k = 0; k < count; k++) {
+    nRuns = MdSpansToRuns(textLen, spans, count, gEmitRuns, MD_MAX_RUNS);
+    for (r = 0; r < nRuns; r++) {
+        const MdRun *run = &gEmitRuns[r];
         TextStyle st;
-        short mode;
-        short linkID = remap ? remap[spans[k].linkID] : spans[k].linkID;
+        short linkID;
 
-        StyleForKind(spans[k].kind, spans[k].level, linkID, &st, &mode);
-        if (mode != 0) {
+        if (!run->bold && !run->italic && !run->code && !run->link && !run->strike)
+            continue;                 /* plain run: base already covers it */
+
+        linkID = run->link ? (remap ? remap[run->linkID] : run->linkID) : 0;
+        st.tsFont = run->code ? monacoFont : timesFont;
+        st.tsFace = (Style) ((run->bold ? bold : 0) |
+                             (run->italic ? italic : 0) |
+                             (run->link ? underline : 0));
+        st.tsSize = CurrentFontSize();
+        st.tsColor.red = linkID;         /* 0 == not a link (see SetLinkID) */
+        st.tsColor.green = run->strike ? 1 : 0;
+        st.tsColor.blue = 0;
+        if (run->strike)
+            gDocHasStrike = true;
+        TESetSelect((short) (offset + run->start), (short) (offset + run->end), te);
+        TESetStyle(doFont + doFace + doSize + doColor, &st, true, te);
+    }
+
+    /* Headings last: bold at a larger size over the line body. Their chars
+       carry no inline attribute, so they were left at base above; set the
+       heading face/size on top without disturbing the run styling around them. */
+    for (k = 0; k < count; k++) {
+        if (spans[k].kind == MD_KIND_HEADING) {
+            TextStyle hs;
+            hs.tsFace = bold;
+            hs.tsSize = HeadingSizeForLevel(spans[k].level);
             TESetSelect((short) (offset + spans[k].start),
                         (short) (offset + spans[k].end), te);
-            TESetStyle(mode, &st, true, te);
+            TESetStyle(doFace + doSize, &hs, true, te);
         }
     }
 }
@@ -223,15 +358,19 @@ static short CompactLinkTable(void)
 
             TEGetStyle((short) runEnd, &st2, &lh2, &fa2, gHiddenTE);
             if (((st2.tsFace & underline) != 0) != underlined ||
-                GetLinkID(&st2) != id)
+                GetLinkID(&st2) != id ||
+                GetStrikeFlag(&st2) != GetStrikeFlag(&st))
                 break;
             runEnd++;
         }
 
         if (underlined && id >= 1 && id <= gLinkCount && remap[id] != id) {
-            TextStyle ns;
+            /* Rewrite only the link ID (red); keep this run's strike flag
+               (green) -- green is uniform across the run thanks to the break
+               condition above, so st's green stands for the whole run. */
+            TextStyle ns = st;
 
-            SetLinkID(&ns, remap[id]);
+            ns.tsColor.red = remap[id];
             TESetSelect((short) i, (short) runEnd, gHiddenTE);
             TESetStyle(doColor, &ns, false, gHiddenTE);
         }
@@ -281,20 +420,6 @@ void ClearStyles(void)
 
     TESetSelect(savedStart, savedEnd, gTE);
 }
-
-/* Scratch buffers for the pure strip pass (mdcore's MdStrip), shared by the
-   non-reentrant BuildHiddenView / InsertMarkdownAsStyled /
-   ClearMarkdownInSelection adapters -- kept at file scope so they stay off
-   the small classic-Mac stack. */
-static MdSpan gStripSpans[MD_MAX_SPANS];
-static MdLinkTable gStripLinks;
-
-/* Scratch for the emit direction (mdcore's MdEmitInline): the coalesced
-   style runs of the range being encoded, and a snapshot of the global link
-   table in mdcore's own layout. Shared by the non-reentrant
-   SyncHiddenToCanonical / EncodeSelectionAsMarkdown adapters. */
-static MdRun gEmitRuns[MD_MAX_SPANS];
-static MdLinkTable gEmitLinks;
 
 /*
     Builds gHiddenTE from gTE's canonical markdown text, stripping the
@@ -378,10 +503,14 @@ void BuildHiddenView(void)
     HUnlock(outH);
     DisposeHandle(outH);
 
-    /* Base plain style plus each parsed span, mapped through the one shared
-       kind->TextStyle encoder. Whole document, no coordinate offset, no link
-       remap (the spans already carry the freshly-published global IDs). */
-    ApplySpanStyles(gHiddenTE, 0, 32767, 0, gStripSpans, spanCount, NULL);
+    /* Recompute the strike fast-path flag from scratch: ApplySpanStyles sets
+       it true iff the rebuilt view actually contains a struck run. */
+    gDocHasStrike = false;
+
+    /* Base plain style plus the flattened, combined style runs. Whole
+       document (offset 0), no link remap (the spans already carry the
+       freshly-published global IDs). */
+    ApplySpanStyles(gHiddenTE, 0, outLen, gStripSpans, spanCount, NULL);
 
     TESetSelect(0, 0, gHiddenTE);
 
@@ -400,8 +529,8 @@ void BuildHiddenView(void)
 */
 /* Coalesces the styled characters of te[from..to) into maximal same-style
    runs (in coordinates relative to `from`), the input MdEmitInline needs.
-   Breaks runs on the bold/italic/code/link booleans only -- a run keeps the
-   linkID of its first character, matching the old emit loop, which captured
+   Breaks runs on the bold/italic/code/link/strike booleans only -- a run keeps
+   the linkID of its first character, matching the old emit loop, which captured
    a link's URL when it opened and ignored any mid-underline id change.
    Returns the run count. */
 static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
@@ -413,7 +542,7 @@ static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
     for (i = from; i < to; i++) {
         TextStyle st;
         short lh, fa;
-        int b, it, cd, lk;
+        int b, it, cd, lk, sk;
         short id;
 
         TEGetStyle((short) i, &st, &lh, &fa, te);
@@ -421,10 +550,12 @@ static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
         it = (st.tsFace & italic) != 0;
         cd = (st.tsFont == monacoFont);
         lk = (st.tsFace & underline) != 0;
+        sk = GetStrikeFlag(&st);
         id = GetLinkID(&st);
 
         if (n > 0 && runs[n - 1].bold == b && runs[n - 1].italic == it &&
-            runs[n - 1].code == cd && runs[n - 1].link == lk) {
+            runs[n - 1].code == cd && runs[n - 1].link == lk &&
+            runs[n - 1].strike == sk) {
             runs[n - 1].end = (i - from) + 1;
         } else if (n < cap) {
             runs[n].start = i - from;
@@ -433,6 +564,7 @@ static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
             runs[n].italic = it;
             runs[n].code = cd;
             runs[n].link = lk;
+            runs[n].strike = sk;
             runs[n].linkID = id;
             n++;
         } else {
@@ -525,7 +657,7 @@ void SyncHiddenToCanonical(void)
             outLen += (lineEnd - lineStart);
         } else {
             short runCount = BuildStyleRuns(gHiddenTE, lineStart, lineEnd,
-                                            monacoFont, gEmitRuns, MD_MAX_SPANS);
+                                            monacoFont, gEmitRuns, MD_MAX_RUNS);
             outLen += MdEmitInline(*srcH + lineStart, lineEnd - lineStart,
                                    gEmitRuns, runCount, &gEmitLinks,
                                    *outH + outLen, outCap - outLen);
@@ -602,7 +734,7 @@ Handle EncodeSelectionAsMarkdown(short start, short end, TEHandle te)
 
     monacoFont = MonacoFont();
     SnapshotLinkTable();
-    runCount = BuildStyleRuns(te, start, end, monacoFont, gEmitRuns, MD_MAX_SPANS);
+    runCount = BuildStyleRuns(te, start, end, monacoFont, gEmitRuns, MD_MAX_RUNS);
 
     HLock(srcH);
     HLock(outH);
@@ -666,8 +798,7 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
        then paints the parsed spans, shifting them into place by insertStart
        and remapping each local link ID to its global one. No heading spans
        occur here (paste is inline-only, headingMode OFF). */
-    ApplySpanStyles(te, insertStart, (short) (insertStart + outLen), insertStart,
-                    gStripSpans, spanCount, remap);
+    ApplySpanStyles(te, insertStart, outLen, gStripSpans, spanCount, remap);
 
     TESetSelect((short) (insertStart + outLen), (short) (insertStart + outLen), te);
 
@@ -1002,6 +1133,39 @@ void ToggleCode(void)
     TESetStyle(doFont, &ts, true, gHiddenTE);
 }
 
+/*
+    Strikethrough toggle in Writer mode. Strike isn't a native text face, so
+    it's carried as the tsColor.green flag (see SetStrikeRange) and the visible
+    line is painted by DrawStruckRuns; the caller repaints the content area
+    afterward so the line appears (or a cleared one is erased). The toggle
+    direction is read from the selection start, matching ToggleFace/ToggleCode.
+*/
+void ToggleStrike(void)
+{
+    short selStart = (**gHiddenTE).selStart;
+    short selEnd = (**gHiddenTE).selEnd;
+    TextStyle ts;
+    short lh, fa, on;
+
+    TEGetStyle(selStart, &ts, &lh, &fa, gHiddenTE);
+    on = GetStrikeFlag(&ts) ? 0 : 1;
+
+    /* Turning strike on (via either path below) means the view now has, or is
+       about to have, a struck run -- arm the DrawStruckRuns fast path. */
+    if (on)
+        gDocHasStrike = true;
+
+    if (selStart == selEnd) {
+        /* Empty selection: park the flag as the typing style so what gets
+           typed next is (un)struck, exactly like ToggleFace at a caret. */
+        SetStrikeFlag(&ts, on);
+        TESetStyle(doColor, &ts, true, gHiddenTE);
+    } else {
+        SetStrikeRange(gHiddenTE, selStart, selEnd, on);
+        TESetSelect(selStart, selEnd, gHiddenTE);
+    }
+}
+
 void ToggleHeadingHidden(short level)
 {
     short selStart;
@@ -1054,17 +1218,21 @@ static void SetTypingStyleNormal(short pos)
     ts.tsFont = fontNum;
     ts.tsFace = normal;
     ts.tsSize = CurrentFontSize();
+    /* Reset the colour too, so neither a link ID (red) nor the strike flag
+       (green) bleeds into whatever is typed after a completed span. */
+    ts.tsColor.red = ts.tsColor.green = ts.tsColor.blue = 0;
     TESetSelect(pos, pos, gHiddenTE);
-    TESetStyle(doFont + doFace + doSize, &ts, true, gHiddenTE);
+    TESetStyle(doFont + doFace + doSize + doColor, &ts, true, gHiddenTE);
 }
 
 /*
     Live "type the markdown, get the formatting" for Writer mode: called
     after every keystroke. Looks backward from the caret for a delimiter
     pair that the just-typed character completed, and if found, strips
-    both delimiters and applies the corresponding style in place.
-    Strikethrough has no native classic Mac text style, so it stays
-    menu-only; everything else, including links, converts live.
+    both delimiters and applies the corresponding style in place. All inline
+    styles convert live, strikethrough (~~) included: it has no native classic
+    Mac text face, so it's applied as the tsColor.green flag via SetStrikeRange
+    and painted by DrawStruckRuns, while the others map to real TextEdit faces.
 */
 void DetectInlineMarkdown(char justTyped)
 {
@@ -1105,7 +1273,11 @@ void DetectInlineMarkdown(char justTyped)
     }
 
     TESetSelect((short) e.styleStart, (short) e.styleEnd, gHiddenTE);
-    {
+    if (e.kind == MD_KIND_STRIKE) {
+        /* Strike shares tsColor with links, so it goes through the same
+           read-modify-write path (never a plain TESetStyle). */
+        SetStrikeRange(gHiddenTE, e.styleStart, e.styleEnd, 1);
+    } else {
         short mode;
         short linkID = 0;
 
@@ -1194,4 +1366,127 @@ void ClearMarkdownInSelection(void)
     DisposeHandle(outH);
 
     TESetSelect(selStart, (short) (selStart + outLen), gTE);
+}
+
+/*
+    Paints the strike-through line over every struck run (tsColor.green == 1)
+    visible in te's view. Strike is not a native text face, so TextEdit never
+    draws it; this is called immediately after TextEdit lays the text down (in
+    DoUpdate, and after each Writer-mode keystroke) so the line always tracks
+    the text. Scrolling needs no special case: TEScroll shifts the drawn line
+    with the text, and any newly exposed line repaints through here.
+
+    Walks display lines via the TERec's lineStarts[], skips those outside the
+    view, and within each visible line draws one segment per maximal run of
+    struck characters sharing a font/face/size (so TextWidth measures it). The
+    per-visible-line cost mirrors the existing per-char TEGetStyle sweeps, so
+    gDocHasStrike short-circuits the whole thing for the common document that
+    has no strikethrough -- no per-keystroke sweep unless strike is in play.
+    (Only meaningful for gHiddenTE; gTE never carries the green flag, and its
+    caller in the Markdown-mode path is already gated on gHideMarkdown.)
+*/
+void DrawStruckRuns(TEHandle te)
+{
+    Rect view;
+    short nLines, L;
+    long teLen;
+    Handle hText;
+    PenState savePen;
+    short saveFont, saveFace, saveSize;
+    RgnHandle saveClip;
+    Rect clipR;
+
+    if (!gDocHasStrike)
+        return;
+
+    view = (**te).viewRect;
+    nLines = (**te).nLines;
+    teLen = (**te).teLength;
+    hText = (**te).hText;
+    if (teLen == 0 || nLines == 0 || hText == NULL)
+        return;
+
+    saveClip = NewRgn();
+    if (saveClip == NULL)
+        return;
+    GetClip(saveClip);
+    /* Confine drawing to the text view intersected with whatever clip is
+       already in force (the update region inside DoUpdate, the full port when
+       called after a keystroke) so a partially-visible top/bottom line can't
+       spill over the margins or scrollbar. */
+    if (!SectRect(&view, &(**saveClip).rgnBBox, &clipR))
+        clipR = view;
+    ClipRect(&clipR);
+
+    GetPenState(&savePen);
+    saveFont = qd.thePort->txFont;
+    saveFace = qd.thePort->txFace;
+    saveSize = qd.thePort->txSize;
+    PenNormal();
+
+    HLock(hText);
+    for (L = 0; L < nLines; L++) {
+        long ls = (**te).lineStarts[L];
+        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
+        Point base = TEGetPoint((short) ls, te);
+        long c;
+
+        if (base.v < view.top - MAX_LINE_HEIGHT)
+            continue;                 /* wholly above the view */
+        if (base.v - MAX_LINE_HEIGHT > view.bottom)
+            break;                    /* this and every later line are below */
+
+        c = ls;
+        while (c < le) {
+            TextStyle st;
+            short lh, fa;
+            long segEnd;
+            short segFont, segFace, segSize, segAscent;
+            Point p;
+            short x0, y, w;
+
+            TEGetStyle((short) c, &st, &lh, &fa, te);
+            if (!GetStrikeFlag(&st)) {
+                c++;
+                continue;
+            }
+
+            segFont = st.tsFont;
+            segFace = st.tsFace;
+            segSize = st.tsSize;
+            segAscent = fa;
+            segEnd = c + 1;
+            while (segEnd < le) {
+                TextStyle st2;
+                short lh2, fa2;
+
+                TEGetStyle((short) segEnd, &st2, &lh2, &fa2, te);
+                if (!GetStrikeFlag(&st2) || st2.tsFont != segFont ||
+                    st2.tsFace != segFace || st2.tsSize != segSize)
+                    break;
+                segEnd++;
+            }
+
+            p = TEGetPoint((short) c, te);
+            x0 = p.h;
+            y = (short) (p.v - segAscent / 3);   /* through the x-height */
+            TextFont(segFont);
+            TextFace(segFace);
+            TextSize(segSize);
+            w = TextWidth(*hText, (short) c, (short) (segEnd - c));
+            if (w > 0) {
+                MoveTo(x0, y);
+                LineTo((short) (x0 + w - 1), y);
+            }
+            c = segEnd;
+        }
+    }
+    HUnlock(hText);
+
+    TextFont(saveFont);
+    TextFace(saveFace);
+    TextSize(saveSize);
+    SetPenState(&savePen);
+    SetClip(saveClip);
+    DisposeRgn(saveClip);
 }

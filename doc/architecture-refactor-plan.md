@@ -23,6 +23,24 @@ change must be behaviour-preserving and keep the 68k build warning-clean.
 - [~] **Item 5** — single source of truth for active-view state — **considered, declined** (see below)
 - [x] **Note** — Times/Monaco `GetFNum` caching
 
+### Second review (2026-07-07, post strike + MPW port)
+
+Re-ran the deepening lens over the strikethrough feature and the MPW/Universal
+port. See "Nested inline styles + strike-adapter pass" at the end.
+
+- [x] **N1** — recursive `MdStrip` + pure `MdSpansToRuns` seam (nested styles now
+  round-trip; fixes the strike+X mode-switch corruption)
+- [x] **N2** — `ApplySpanStyles` applies one *combined* `TextStyle` per flattened
+  run (nesting renders; strike two-pass folded in)
+- [x] **N3** — `SetStrikeFlag` write helper, mirroring `SetLinkID` (completes Item 2's
+  pattern for the green channel)
+- [x] **N4** — `DoCut` missing strike repaint (latent desync) fixed to mirror `DoPaste`
+- [x] **N5** — `gDocHasStrike` fast path: `DrawStruckRuns` no longer sweeps every
+  keystroke in a document with no strikethrough
+- [~] **N6** — `StyleToAttrs` decode helper (mirror of `StyleForKind`) — **deferred**:
+  a worthwhile encode/decode-symmetry cleanup, but Toolbox-bound (not host-testable)
+  and not correctness; left for a focused pass
+
 Items 1–3 landed in `app/markdown.c` this session (all behaviour-preserving).
 New `static` helpers at the top of the file: `SetLinkID`/`GetLinkID`,
 `HeadingSizeForLevel`/`HeadingLevelForSize`, `StyleForKind`, `ApplySpanStyles`.
@@ -163,3 +181,58 @@ life; both fonts have positive IDs). All 10 `GetFNum` sites in `markdown.c` now 
 through them. `main.c:124`'s single startup call is left alone: it's one-time and
 in another translation unit, so caching it buys nothing and would only widen the
 accessors' linkage.
+
+---
+
+## Nested inline styles + strike-adapter pass (2026-07-07)
+
+Two independent reviews (a strike/MPW bug hunt and a fresh deepening lens) both
+converged on the same headline: strikethrough got the **pure** half right
+(`MdStrip`/`MdEmitInline`/`MdDetectInline` are host-tested) but the round-trip was
+lossy for *combined* styles, and the encoding leaked a little on the Mac side.
+
+**N1 — recursive `MdStrip` + `MdSpansToRuns` (Strong, host-testable).** `MdStrip`
+was a flat single pass: a delimiter pair's content was copied verbatim, never
+re-scanned, so `~~**x**~~` stripped to literal `**x**` (strike-only) — the inner
+bold lost and the `*` characters made visible. Reachable from the UI (apply bold
++ strike in Writer mode, switch to Markdown and back; also undo/redo, paste).
+Fixed by making the inline scanner (`MdStripInlineAt` / `MdStripSpanContent`)
+mutually recursive so a pair's content is itself stripped, plus an explicit
+`***bold italic***` case. Nested spans now overlap; the new **pure**
+`MdSpansToRuns` flattens overlapping single-kind spans into one
+combined-attribute `MdRun` per range. Locked by new host tests (nested
+round-trips, `MdSpansToRuns` unit tests) and it replaced the test harness's
+hand-rolled `runs_from_spans`, so the round-trip now exercises the production
+coalescer.
+
+**N2 — combined-style `ApplySpanStyles` (Strong).** Rewrote the build-side apply
+to flatten via `MdSpansToRuns` and write ONE combined `TextStyle` per run (face
+bits OR'd, Monaco iff code, red = link ID, green = strike). This is what makes
+nesting *render* — the old span-at-a-time apply let a later face replace an
+earlier one. Headings stay a separate line-level pass; the strike second-pass is
+gone (folded into the combined colour).
+
+**N3 — `SetStrikeFlag`.** Item 2 gave links both `SetLinkID`/`GetLinkID`; strike
+had only the getter. Added the setter; the two green-channel write sites route
+through it. The "green ∈ {0,1}, independent of red" invariant now has one home.
+
+**N4 — `DoCut` strike repaint.** `DoPaste` invalidates the content region so
+`DrawStruckRuns` repaints; `DoCut` did not, so a cut on a line with a struck run
+left the strike overlay stale until the next update. One-liner, mirrors `DoPaste`.
+
+**N5 — `gDocHasStrike` fast path.** `DrawStruckRuns` swept every visible char via
+`TEGetStyle` after every keystroke, even with zero strike — real lag on the 8 MHz
+SE. A conservative flag (set wherever strike can appear, recomputed each
+`BuildHiddenView`, only ever set false there) lets the common no-strike document
+skip the sweep entirely.
+
+**N6 — `StyleToAttrs` decoder — deferred.** The inverse of `StyleForKind` is still
+re-derived at ~5 sites (`BuildStyleRuns`, `CompactLinkTable`, `SetStrikeRange`,
+`DrawStruckRuns`, `SelectionHasFace`). A single decoder would mirror the forward
+encoder, but it's Toolbox-bound (not host-testable) and pure cleanup, so it was
+left for a focused pass rather than bundled with correctness work.
+
+**Verified:** host tests green (258 checks), cppcheck clean at the CI gate, 68k
+build warning-clean (both the local fork toolchain and the
+`ghcr.io/matthewdeaves/retro68` container). The Toolbox-side changes (N2, N4, N5)
+are not host-reachable and still want a real-hardware pass.

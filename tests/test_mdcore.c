@@ -10,12 +10,12 @@
 #include "test_util.h"
 #include "mdcore.h"
 
-static char g_out[4096];
+static char g_out[8192];
 static MdSpan g_spans[MD_MAX_SPANS];
 static short g_nSpans;
 static MdLinkTable g_links;
-static char g_out2[4096];
-static MdRun g_runs[MD_MAX_SPANS];
+static char g_out2[8192];
+static MdRun g_runs[MD_MAX_RUNS];
 
 /* Run MdStrip over a C string; returns stripped length. headingMode is one
    of MD_HEADINGS_OFF / _SPAN / _STRIP. */
@@ -68,6 +68,33 @@ static void test_bold_beats_italic(void)
     CHECK_EQ(g_spans[0].kind, MD_KIND_BOLD, "middle span is bold");
     CHECK_EQ(g_spans[0].start, 2, "bold starts at 'x'");
     CHECK_EQ(g_spans[0].end, 3, "bold ends after 'x'");
+}
+
+static void test_strike(void)
+{
+    long n = strip("~~gone~~", 0, 1);
+    CHECK_STR(g_out, n, "gone", "strike delimiters stripped");
+    CHECK_EQ(g_nSpans, 1, "one strike span");
+    CHECK_EQ(g_spans[0].kind, MD_KIND_STRIKE, "kind is strike");
+    CHECK_EQ(g_spans[0].start, 0, "strike span start");
+    CHECK_EQ(g_spans[0].end, 4, "strike span covers 'gone'");
+
+    /* In context, and not confused by a single '~'. */
+    n = strip("a ~~x~~ b", 0, 1);
+    CHECK_STR(g_out, n, "a x b", "strike in context stripped");
+    CHECK_EQ(g_nSpans, 1, "single strike span in the middle");
+    CHECK_EQ(g_spans[0].start, 2, "strike starts at 'x'");
+    CHECK_EQ(g_spans[0].end, 3, "strike ends after 'x'");
+
+    /* A lone '~~' with no partner on the line stays literal. */
+    n = strip("a ~~ b", 0, 1);
+    CHECK_STR(g_out, n, "a ~~ b", "unmatched ~~ kept literal");
+    CHECK_EQ(g_nSpans, 0, "no span for an unmatched ~~");
+
+    /* A single tilde is never a delimiter. */
+    n = strip("1~2", 0, 1);
+    CHECK_STR(g_out, n, "1~2", "lone tilde kept literal");
+    CHECK_EQ(g_nSpans, 0, "no span for a lone tilde");
 }
 
 static void test_link(void)
@@ -174,57 +201,52 @@ static void test_empty_italic_from_double_star(void)
     CHECK_EQ(g_spans[0].end, 0, "empty italic zero-length");
 }
 
-/* Build emit runs from strip's non-overlapping single-kind spans: for each
-   stripped char, gather the attributes of whatever span covers it, then
-   coalesce equal neighbours. (The Mac adapter builds the same runs from
-   TEGetStyle instead.) */
-static short runs_from_spans(long textLen, const MdSpan *spans, short nSpans,
-                             MdRun *runs)
-{
-    short nRuns = 0;
-    long c;
-
-    for (c = 0; c < textLen; c++) {
-        int b = 0, it = 0, cd = 0, lk = 0;
-        short id = 0, s;
-
-        for (s = 0; s < nSpans; s++) {
-            if (spans[s].start <= c && c < spans[s].end) {
-                switch (spans[s].kind) {
-                    case MD_KIND_BOLD:   b = 1; break;
-                    case MD_KIND_ITALIC: it = 1; break;
-                    case MD_KIND_CODE:   cd = 1; break;
-                    case MD_KIND_LINK:   lk = 1; id = spans[s].linkID; break;
-                    default: break;
-                }
-            }
-        }
-        if (nRuns > 0 && runs[nRuns - 1].bold == b && runs[nRuns - 1].italic == it &&
-            runs[nRuns - 1].code == cd && runs[nRuns - 1].link == lk &&
-            runs[nRuns - 1].linkID == id) {
-            runs[nRuns - 1].end = c + 1;
-        } else {
-            runs[nRuns].start = c;
-            runs[nRuns].end = c + 1;
-            runs[nRuns].bold = b;
-            runs[nRuns].italic = it;
-            runs[nRuns].code = cd;
-            runs[nRuns].link = lk;
-            runs[nRuns].linkID = id;
-            nRuns++;
-        }
-    }
-    return nRuns;
-}
-
-/* strip then emit must recover the original inline markdown. */
+/* strip then emit must recover the original inline markdown. Uses the real
+   pure MdSpansToRuns (the same span->run flattening the Mac adapter runs) to
+   turn strip's overlapping spans into the runs MdEmitInline consumes, so the
+   round-trip exercises production coalescing, not a test-only copy of it. */
 static void roundtrip(const char *s, const char *msg)
 {
     long stripped = strip(s, MD_HEADINGS_OFF, 1);
-    short nRuns = runs_from_spans(stripped, g_spans, g_nSpans, g_runs);
+    short nRuns = MdSpansToRuns(stripped, g_spans, g_nSpans, g_runs, MD_MAX_RUNS);
     long emitted = MdEmitInline(g_out, stripped, g_runs, nRuns, &g_links,
                                 g_out2, (long) sizeof g_out2);
     CHECK_STR(g_out2, emitted, s, msg);
+}
+
+/* Regression guard: many DISJOINT inline spans flatten to ~2x as many runs
+   (styled word, plain gap, styled word...). With the run buffer sized only to
+   MD_MAX_SPANS this folded the document's tail into one wrong style; sized to
+   MD_MAX_RUNS it must style every span and round-trip exactly. 300 italic
+   words -> 300 spans -> ~600 runs, comfortably past the 512 span cap. */
+static void test_many_spans_no_truncation(void)
+{
+    static char src[4096];
+    long n = 0;
+    int i;
+    short nRuns;
+    long emitted;
+
+    for (i = 0; i < 300; i++) {
+        src[n++] = '*'; src[n++] = 'a'; src[n++] = '*'; src[n++] = ' ';
+    }
+    src[n] = '\0';
+
+    {
+        MdStripOpts opts;
+        opts.headingMode = MD_HEADINGS_OFF;
+        opts.startsAtLineStart = 1;
+        (void) MdStrip(src, n, &opts, g_out, (long) sizeof g_out,
+                       g_spans, MD_MAX_SPANS, &g_nSpans, &g_links);
+    }
+    CHECK_EQ(g_nSpans, 300, "300 disjoint italic spans recorded");
+
+    nRuns = MdSpansToRuns((long) (600 /* "a " x300 */), g_spans, g_nSpans,
+                          g_runs, MD_MAX_RUNS);
+    CHECK(nRuns > MD_MAX_SPANS, "flattens to more runs than the span cap");
+    emitted = MdEmitInline(g_out, 600, g_runs, nRuns, &g_links,
+                           g_out2, (long) sizeof g_out2);
+    CHECK_STR(g_out2, emitted, src, "300-span document round-trips untruncated");
 }
 
 static void test_emit_roundtrip(void)
@@ -237,6 +259,92 @@ static void test_emit_roundtrip(void)
     roundtrip("**bold** and *italic* and `code`", "several inline round-trip");
     roundtrip("see [text](http://x) end", "link round-trips");
     roundtrip("[a](u1) and [b](u2)", "two links round-trip");
+    roundtrip("~~struck~~", "strike round-trips");
+    roundtrip("a ~~b~~ c", "strike in context round-trips");
+    roundtrip("~~struck~~ and **bold** and *it*", "strike beside bold/italic round-trips");
+}
+
+/* Nested inline styles: the content of a delimiter pair is itself styled.
+   Each string is the CANONICAL serialization MdEmitInline produces for the
+   combined run (open order link>strike>bold>italic>code), so strip->emit
+   recovers it byte-for-byte -- the exact Writer<->Markdown mode-switch path
+   that used to corrupt combined styles (bug: ~~**x**~~ stripped to literal
+   "**x**", strike-only). */
+static void test_nested_roundtrip(void)
+{
+    roundtrip("~~**bold**~~", "strike wrapping bold round-trips");
+    roundtrip("~~*it*~~", "strike wrapping italic round-trips");
+    roundtrip("~~`c`~~", "strike wrapping code round-trips");
+    roundtrip("***bi***", "bold+italic (***) round-trips");
+    roundtrip("**`c`**", "bold wrapping code round-trips");
+    roundtrip("a ***x*** b", "bold+italic in context round-trips");
+    roundtrip("[**x**](u)", "bold link round-trips");
+    roundtrip("[~~x~~](u)", "struck link round-trips");
+    roundtrip("[***x***](u)", "bold+italic link round-trips");
+    roundtrip("~~***x***~~", "strike+bold+italic round-trips");
+    roundtrip("[~~**x**~~](u)", "link+strike+bold round-trips");
+    roundtrip("see [~~**t**~~](u) ok", "everything nested in context round-trips");
+}
+
+/* Flatten a fully-uniform strip result to its single combined run and return
+   it, asserting the whole string collapsed to exactly one run. */
+static MdRun only_run(const char *src, const char *msg)
+{
+    long n = strip(src, MD_HEADINGS_OFF, 1);
+    short nRuns = MdSpansToRuns(n, g_spans, g_nSpans, g_runs, MD_MAX_SPANS);
+    CHECK_EQ(nRuns, 1, msg);
+    return g_runs[0];
+}
+
+/* The nested spans strip records must OR into the right combined attributes. */
+static void test_nested_strip_attributes(void)
+{
+    MdRun r;
+
+    r = only_run("~~**x**~~", "strike+bold collapses to one run");
+    CHECK(r.strike && r.bold && !r.italic && !r.code && !r.link,
+          "~~**x**~~ is bold AND strike");
+
+    r = only_run("***x***", "bold+italic collapses to one run");
+    CHECK(r.bold && r.italic && !r.strike && !r.code, "***x*** is bold AND italic");
+
+    r = only_run("[**x**](u)", "bold link collapses to one run");
+    CHECK(r.link && r.bold && r.linkID == 1, "[**x**](u) is link AND bold, id 1");
+    CHECK_STR(&g_links.url[1][1], g_links.url[1][0], "u", "nested link url captured");
+
+    r = only_run("~~***x***~~", "triple collapses to one run");
+    CHECK(r.bold && r.italic && r.strike, "~~***x***~~ is bold+italic+strike");
+}
+
+/* MdSpansToRuns in isolation: overlap ORs, disjoint spans split, equal
+   neighbours coalesce, HEADING spans are ignored, and linkID rides along. */
+static void test_spans_to_runs(void)
+{
+    MdSpan sp[3];
+    MdRun rn[8];
+    short n;
+
+    /* Two overlapping spans over "abcd": bold[0,3), italic[1,4) -> three runs
+       b | b+i | i. */
+    sp[0].start = 0; sp[0].end = 3; sp[0].kind = MD_KIND_BOLD;   sp[0].level = 0; sp[0].linkID = 0;
+    sp[1].start = 1; sp[1].end = 4; sp[1].kind = MD_KIND_ITALIC; sp[1].level = 0; sp[1].linkID = 0;
+    n = MdSpansToRuns(4, sp, 2, rn, 8);
+    CHECK_EQ(n, 3, "overlap of bold[0,3) and italic[1,4) makes 3 runs");
+    CHECK(rn[0].bold && !rn[0].italic && rn[0].start == 0 && rn[0].end == 1, "run 0 bold only [0,1)");
+    CHECK(rn[1].bold && rn[1].italic && rn[1].start == 1 && rn[1].end == 3, "run 1 bold+italic [1,3)");
+    CHECK(!rn[2].bold && rn[2].italic && rn[2].start == 3 && rn[2].end == 4, "run 2 italic only [3,4)");
+
+    /* A HEADING span contributes no inline attribute: plain single run. */
+    sp[0].start = 0; sp[0].end = 5; sp[0].kind = MD_KIND_HEADING; sp[0].level = 2; sp[0].linkID = 0;
+    n = MdSpansToRuns(5, sp, 1, rn, 8);
+    CHECK_EQ(n, 1, "a heading-only span makes one plain run");
+    CHECK(!rn[0].bold && !rn[0].italic && !rn[0].link, "heading span adds no inline attribute");
+
+    /* linkID rides along and coalesces. */
+    sp[0].start = 0; sp[0].end = 2; sp[0].kind = MD_KIND_LINK; sp[0].level = 0; sp[0].linkID = 7;
+    n = MdSpansToRuns(2, sp, 1, rn, 8);
+    CHECK_EQ(n, 1, "uniform link is one run");
+    CHECK(rn[0].link && rn[0].linkID == 7, "link run carries its id");
 }
 
 static void test_emit_combined_attributes(void)
@@ -247,7 +355,7 @@ static void test_emit_combined_attributes(void)
     /* A run that is bold AND italic: open **, then *, close *, then **. */
     runs[0].start = 0; runs[0].end = 2;
     runs[0].bold = 1; runs[0].italic = 1; runs[0].code = 0; runs[0].link = 0;
-    runs[0].linkID = 0;
+    runs[0].strike = 0; runs[0].linkID = 0;
     n = MdEmitInline("hi", 2, runs, 1, (MdLinkTable *) 0, g_out2, sizeof g_out2);
     CHECK_STR(g_out2, n, "***hi***", "bold+italic nests as ***");
 
@@ -257,9 +365,16 @@ static void test_emit_combined_attributes(void)
     g_links.url[1][1] = 'u';
     runs[0].start = 0; runs[0].end = 1;
     runs[0].bold = 1; runs[0].italic = 0; runs[0].code = 0; runs[0].link = 1;
-    runs[0].linkID = 1;
+    runs[0].strike = 0; runs[0].linkID = 1;
     n = MdEmitInline("x", 1, runs, 1, &g_links, g_out2, sizeof g_out2);
     CHECK_STR(g_out2, n, "[**x**](u)", "bold link wraps correctly");
+
+    /* Strike + bold: strike is the outer of the two, so ~~ wraps **. */
+    runs[0].start = 0; runs[0].end = 2;
+    runs[0].bold = 1; runs[0].italic = 0; runs[0].code = 0; runs[0].link = 0;
+    runs[0].strike = 1; runs[0].linkID = 0;
+    n = MdEmitInline("hi", 2, runs, 1, (MdLinkTable *) 0, g_out2, sizeof g_out2);
+    CHECK_STR(g_out2, n, "~~**hi**~~", "strike wraps bold");
 }
 
 int main(void)
@@ -269,6 +384,7 @@ int main(void)
     test_bold();
     test_italic_code();
     test_bold_beats_italic();
+    test_strike();
     test_link();
     test_link_without_table();
     test_heading();
@@ -278,8 +394,12 @@ int main(void)
     test_heading_strip_mode();
     test_unmatched_delimiters();
     test_empty_italic_from_double_star();
+    test_nested_strip_attributes();
+    test_spans_to_runs();
+    test_many_spans_no_truncation();
     printf("test_mdcore (emit):\n");
     test_emit_roundtrip();
+    test_nested_roundtrip();
     test_emit_combined_attributes();
     return TEST_RESULT();
 }

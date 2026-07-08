@@ -86,6 +86,25 @@ static void test_code_opening_completes(void)
                "code: opening ` reaches a later closing `");
 }
 
+static void test_strike_closing_completes(void)
+{
+    /* "~~gone~~" + the final '~': the just-typed ~~ closes an opening ~~ at
+       the line start. Delete both pairs, strike the "gone" between them. */
+    MdInlineEdit e = det("~~gone~~", 8, '~');
+    check_plan(e, MD_KIND_STRIKE, 6, 8, 0, 2, 0, 4, 4, 1,
+               "strike: closing ~~ completes the pair");
+}
+
+static void test_strike_opening_completes(void)
+{
+    /* "AB~~CD~~" + the '~' at index 3: the just-typed ~~ (2..3) has no
+       opening behind it, so it becomes the OPENING for the closing ~~ at
+       6..7 -- strike the "CD" that lies between them. */
+    MdInlineEdit e = det("AB~~CD~~", 4, '~');
+    check_plan(e, MD_KIND_STRIKE, 6, 8, 2, 4, 2, 4, 2, 1,
+               "strike: opening ~~ reaches a later closing ~~");
+}
+
 static void test_link_completes(void)
 {
     /* "[t](u)" + the closing ')': strip the "](u)" tail and the leading
@@ -158,6 +177,10 @@ static void test_no_match_cases(void)
              "a space that is not a heading prefix does not match");
     CHECK_EQ(det("[t]u)", 5, ')').kind, MD_INLINE_NONE,
              "a ) without a preceding ]( does not match");
+    CHECK_EQ(det("a~", 2, '~').kind, MD_INLINE_NONE,
+             "a single ~ does not match");
+    CHECK_EQ(det("~~", 2, '~').kind, MD_INLINE_NONE,
+             "a bare ~~ with nothing before it does not match");
 }
 
 static void test_carriage_return_not_handled(void)
@@ -177,6 +200,8 @@ int main(void)
     test_italic_opening_completes();
     test_code_closing_completes();
     test_code_opening_completes();
+    test_strike_closing_completes();
+    test_strike_opening_completes();
     test_link_completes();
     test_link_longer_url();
     test_heading_levels();

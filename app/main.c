@@ -149,6 +149,12 @@ static void DoUpdate(WindowPtr w)
     BeginUpdate(w);
     EraseRect(&w->portRect);
     TEUpdate(&w->portRect, gActiveTE);
+    /* Strikethrough isn't a native text face, so TextEdit never draws it;
+       overpaint the line on struck runs now that the text is down. Only in
+       Writer mode: gActiveTE is gHiddenTE there, and gTE (Markdown mode) never
+       carries the strike flag, so this would be a no-op sweep otherwise. */
+    if (gHideMarkdown)
+        DrawStruckRuns(gActiveTE);
     DrawControls(w);
     EndUpdate(w);
 }
@@ -220,13 +226,18 @@ static void DoMenuCommand(long menuResult)
                 case iBold:   ToggleFace(bold); break;
                 case iItalic: ToggleFace(italic); break;
                 case iCode:   ToggleCode(); break;
-                case iStrike: break; /* no native strikethrough on classic Mac text styles */
+                case iStrike: ToggleStrike(); break;
                 case iH1:     ToggleHeadingHidden(1); break;
                 case iH2:     ToggleHeadingHidden(2); break;
                 case iH3:     ToggleHeadingHidden(3); break;
                 case iLink:   DoLinkHidden(); break;
                 case iNone:   ClearSelectionStyleHidden(); break;
             }
+            /* Any of these may have added or removed a strike-through, and the
+               native TESetStyle redraw doesn't know about the overpainted
+               line. Repaint the content so the line is drawn (or an erased
+               one cleared) through the normal update path. */
+            InvalRect(&gWindow->portRect);
         } else {
             switch (menuItem) {
                 case iBold:   WrapSelection("**", "**"); break;
@@ -364,6 +375,10 @@ static void EventLoop(void)
                         }
                         ScrollCaretIntoView();
                         UpdateScrollbarRange();
+                        /* TextEdit redrew the edited line(s) but not the strike
+                           line; repaint the visible struck runs on top. */
+                        if (gHideMarkdown)
+                            DrawStruckRuns(gActiveTE);
                     }
                     break;
                 }

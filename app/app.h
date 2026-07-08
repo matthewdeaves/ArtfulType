@@ -41,6 +41,10 @@
 #define MARGIN_BOTTOM 24
 #define MENU_BAR_HEIGHT 20
 #define FONT_SIZE 18
+/* Generous upper bound on a single line's pixel height (the largest heading,
+   H1, is ~30pt); used only as visibility slack when culling lines in
+   DrawStruckRuns, so it just has to be >= any real line height. */
+#define MAX_LINE_HEIGHT 64
 #define SCROLLBAR_WIDTH 16
 #define kBackspaceKey 0x08
 #define kReturnKey    0x0D
@@ -224,8 +228,10 @@ void DoLink(void);
 void ToggleFace(Style face);
 void DoLinkHidden(void);
 void ToggleCode(void);
+void ToggleStrike(void);
 void ToggleHeadingHidden(short level);
 void DetectInlineMarkdown(char justTyped);
+void DrawStruckRuns(TEHandle te);
 void ClearSelectionStyleHidden(void);
 void ClearMarkdownInSelection(void);
 short AddLinkURL(const unsigned char *url);
