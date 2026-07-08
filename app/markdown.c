@@ -34,10 +34,12 @@ void ClearStyles(void)
     TESetSelect(savedStart, savedEnd, gTE);
 }
 
-typedef struct {
-    short start, end, kind, level;
-    short linkID;
-} StyleOp;
+/* Scratch buffers for the pure strip pass (mdcore's MdStrip), shared by the
+   non-reentrant BuildHiddenView / InsertMarkdownAsStyled /
+   ClearMarkdownInSelection adapters -- kept at file scope so they stay off
+   the small classic-Mac stack. */
+static MdSpan gStripSpans[MD_MAX_SPANS];
+static MdLinkTable gStripLinks;
 
 /*
     Builds gHiddenTE from gTE's canonical markdown text, stripping the
@@ -73,13 +75,12 @@ void BuildHiddenView(void)
     long len;
     Handle outH;
     long outLen;
-    long i;
-    static StyleOp ops[MAX_STYLE_OPS];
-    short opCount;
+    short spanCount;
     short fontNum;
     TextStyle ts;
     short k;
     Rect savedViewRect;
+    MdStripOpts opts;
 
     /* Parsing the whole document and applying one TESetStyle call per
        styled span is, on real 68000 hardware, slow enough on a long,
@@ -89,8 +90,6 @@ void BuildHiddenView(void)
        incremental styling) is a much bigger, riskier change. */
     SetCursor(*GetCursor(watchCursor));
 
-    opCount = 0;
-    gLinkCount = 0;
     srcH = (**gTE).hText;
     len = (**gTE).teLength;
     outH = NewHandle(len + 1);
@@ -98,137 +97,21 @@ void BuildHiddenView(void)
         InitCursor();
         return;
     }
-    outLen = 0;
 
     HLock(srcH);
     HLock(outH);
-
-    i = 0;
-    while (i < len) {
-        if (i == 0 || (*srcH)[i - 1] == '\r') {
-            short level = 0;
-
-            while (level < 3 && i + level < len && (*srcH)[i + level] == '#')
-                level++;
-            if (level > 0 && i + level < len && (*srcH)[i + level] == ' ') {
-                long lineStart = i + level + 1;
-                long lineEnd = lineStart;
-                long outStart = outLen;
-
-                while (lineEnd < len && (*srcH)[lineEnd] != '\r') {
-                    (*outH)[outLen++] = (*srcH)[lineEnd];
-                    lineEnd++;
-                }
-                if (opCount < MAX_STYLE_OPS) {
-                    ops[opCount].start = (short) outStart;
-                    ops[opCount].end = (short) outLen;
-                    ops[opCount].kind = 'H';
-                    ops[opCount].level = level;
-                    opCount++;
-                }
-                i = lineEnd;
-                continue;
-            }
-        }
-
-        if (i + 1 < len && (*srcH)[i] == '*' && (*srcH)[i + 1] == '*') {
-            long j = i + 2;
-
-            while (j + 1 < len && !((*srcH)[j] == '*' && (*srcH)[j + 1] == '*'))
-                j++;
-            if (j + 1 < len) {
-                long outStart = outLen, m;
-
-                for (m = i + 2; m < j; m++)
-                    (*outH)[outLen++] = (*srcH)[m];
-                if (opCount < MAX_STYLE_OPS) {
-                    ops[opCount].start = (short) outStart;
-                    ops[opCount].end = (short) outLen;
-                    ops[opCount].kind = 'B';
-                    opCount++;
-                }
-                i = j + 2;
-                continue;
-            }
-        }
-        if ((*srcH)[i] == '*') {
-            long j = i + 1;
-
-            while (j < len && (*srcH)[j] != '*')
-                j++;
-            if (j < len) {
-                long outStart = outLen, m;
-
-                for (m = i + 1; m < j; m++)
-                    (*outH)[outLen++] = (*srcH)[m];
-                if (opCount < MAX_STYLE_OPS) {
-                    ops[opCount].start = (short) outStart;
-                    ops[opCount].end = (short) outLen;
-                    ops[opCount].kind = 'I';
-                    opCount++;
-                }
-                i = j + 1;
-                continue;
-            }
-        }
-        if ((*srcH)[i] == '`') {
-            long j = i + 1;
-
-            while (j < len && (*srcH)[j] != '`')
-                j++;
-            if (j < len) {
-                long outStart = outLen, m;
-
-                for (m = i + 1; m < j; m++)
-                    (*outH)[outLen++] = (*srcH)[m];
-                if (opCount < MAX_STYLE_OPS) {
-                    ops[opCount].start = (short) outStart;
-                    ops[opCount].end = (short) outLen;
-                    ops[opCount].kind = 'C';
-                    opCount++;
-                }
-                i = j + 1;
-                continue;
-            }
-        }
-        if ((*srcH)[i] == '[') {
-            long closeBracket = i + 1;
-
-            while (closeBracket < len && (*srcH)[closeBracket] != ']')
-                closeBracket++;
-            if (closeBracket < len && closeBracket + 1 < len && (*srcH)[closeBracket + 1] == '(') {
-                long closeParen = closeBracket + 2;
-
-                while (closeParen < len && (*srcH)[closeParen] != ')')
-                    closeParen++;
-                if (closeParen < len) {
-                    long outStart = outLen, m;
-                    Str255 url;
-                    long urlLen = closeParen - (closeBracket + 2);
-
-                    for (m = i + 1; m < closeBracket; m++)
-                        (*outH)[outLen++] = (*srcH)[m];
-                    if (urlLen > 255) urlLen = 255;
-                    url[0] = (unsigned char) urlLen;
-                    BlockMove(*srcH + closeBracket + 2, url + 1, urlLen);
-                    if (opCount < MAX_STYLE_OPS) {
-                        ops[opCount].start = (short) outStart;
-                        ops[opCount].end = (short) outLen;
-                        ops[opCount].kind = 'L';
-                        ops[opCount].linkID = AddLinkURL(url);
-                        opCount++;
-                    }
-                    i = closeParen + 1;
-                    continue;
-                }
-            }
-        }
-
-        (*outH)[outLen++] = (*srcH)[i];
-        i++;
-    }
-
+    opts.headingMode = MD_HEADINGS_SPAN;
+    opts.startsAtLineStart = 1;
+    outLen = MdStrip(*srcH, len, &opts, *outH, len + 1,
+                     gStripSpans, MD_MAX_SPANS, &spanCount, &gStripLinks);
     HUnlock(srcH);
+
+    /* Publish the freshly-parsed link table to the Mac-side globals. The
+       table is rebuilt from scratch on every BuildHiddenView, so link IDs
+       never accumulate across rebuilds. */
+    gLinkCount = gStripLinks.count;
+    for (k = 1; k <= gStripLinks.count; k++)
+        BlockMove(gStripLinks.url[k], gLinkURLs[k], gStripLinks.url[k][0] + 1);
 
     SuppressDrawing(gHiddenTE, &savedViewRect);
 
@@ -250,33 +133,34 @@ void BuildHiddenView(void)
     TESetSelect(0, 32767, gHiddenTE);
     TESetStyle(doFont + doFace + doSize + doColor, &ts, true, gHiddenTE);
 
-    for (k = 0; k < opCount; k++) {
+    /* The one place that maps a markdown "kind" onto a concrete TextStyle. */
+    for (k = 0; k < spanCount; k++) {
         TextStyle opStyle;
 
-        TESetSelect(ops[k].start, ops[k].end, gHiddenTE);
-        switch (ops[k].kind) {
-            case 'B':
+        TESetSelect((short) gStripSpans[k].start, (short) gStripSpans[k].end, gHiddenTE);
+        switch (gStripSpans[k].kind) {
+            case MD_KIND_BOLD:
                 opStyle.tsFace = bold;
                 TESetStyle(doFace, &opStyle, true, gHiddenTE);
                 break;
-            case 'I':
+            case MD_KIND_ITALIC:
                 opStyle.tsFace = italic;
                 TESetStyle(doFace, &opStyle, true, gHiddenTE);
                 break;
-            case 'C':
+            case MD_KIND_CODE:
                 GetFNum("\pMonaco", &opStyle.tsFont);
                 TESetStyle(doFont, &opStyle, true, gHiddenTE);
                 break;
-            case 'L':
+            case MD_KIND_LINK:
                 opStyle.tsFace = underline;
-                opStyle.tsColor.red = ops[k].linkID;
+                opStyle.tsColor.red = gStripSpans[k].linkID;
                 opStyle.tsColor.green = 0;
                 opStyle.tsColor.blue = 0;
                 TESetStyle(doFace + doColor, &opStyle, true, gHiddenTE);
                 break;
-            case 'H':
+            case MD_KIND_HEADING:
                 opStyle.tsFace = bold;
-                opStyle.tsSize = CurrentFontSize() + (4 - ops[k].level) * 4;
+                opStyle.tsSize = CurrentFontSize() + (4 - gStripSpans[k].level) * 4;
                 TESetStyle(doFace + doSize, &opStyle, true, gHiddenTE);
                 break;
         }
@@ -573,122 +457,34 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
 {
     Handle outH;
     long outLen;
-    long i;
-    static StyleOp ops[MAX_STYLE_OPS];
-    short opCount = 0;
+    short spanCount;
+    short remap[MD_MAX_LINKS + 1];
     short insertStart;
     short k;
     TextStyle baseStyle;
     short fontNum;
+    MdStripOpts opts;
 
     outH = NewHandle(srcLen + 1);
     if (outH == NULL)
         return;
-    outLen = 0;
 
     HLock(srcH);
     HLock(outH);
-
-    i = 0;
-    while (i < srcLen) {
-        if (i + 1 < srcLen && (*srcH)[i] == '*' && (*srcH)[i + 1] == '*') {
-            long j = i + 2;
-
-            while (j + 1 < srcLen && !((*srcH)[j] == '*' && (*srcH)[j + 1] == '*'))
-                j++;
-            if (j + 1 < srcLen) {
-                long outStart = outLen, m;
-
-                for (m = i + 2; m < j; m++)
-                    (*outH)[outLen++] = (*srcH)[m];
-                if (opCount < MAX_STYLE_OPS) {
-                    ops[opCount].start = (short) outStart;
-                    ops[opCount].end = (short) outLen;
-                    ops[opCount].kind = 'B';
-                    opCount++;
-                }
-                i = j + 2;
-                continue;
-            }
-        }
-        if ((*srcH)[i] == '*') {
-            long j = i + 1;
-
-            while (j < srcLen && (*srcH)[j] != '*')
-                j++;
-            if (j < srcLen) {
-                long outStart = outLen, m;
-
-                for (m = i + 1; m < j; m++)
-                    (*outH)[outLen++] = (*srcH)[m];
-                if (opCount < MAX_STYLE_OPS) {
-                    ops[opCount].start = (short) outStart;
-                    ops[opCount].end = (short) outLen;
-                    ops[opCount].kind = 'I';
-                    opCount++;
-                }
-                i = j + 1;
-                continue;
-            }
-        }
-        if ((*srcH)[i] == '`') {
-            long j = i + 1;
-
-            while (j < srcLen && (*srcH)[j] != '`')
-                j++;
-            if (j < srcLen) {
-                long outStart = outLen, m;
-
-                for (m = i + 1; m < j; m++)
-                    (*outH)[outLen++] = (*srcH)[m];
-                if (opCount < MAX_STYLE_OPS) {
-                    ops[opCount].start = (short) outStart;
-                    ops[opCount].end = (short) outLen;
-                    ops[opCount].kind = 'C';
-                    opCount++;
-                }
-                i = j + 1;
-                continue;
-            }
-        }
-        if ((*srcH)[i] == '[') {
-            long closeBracket = i + 1;
-
-            while (closeBracket < srcLen && (*srcH)[closeBracket] != ']')
-                closeBracket++;
-            if (closeBracket < srcLen && closeBracket + 1 < srcLen && (*srcH)[closeBracket + 1] == '(') {
-                long closeParen = closeBracket + 2;
-
-                while (closeParen < srcLen && (*srcH)[closeParen] != ')')
-                    closeParen++;
-                if (closeParen < srcLen) {
-                    long outStart = outLen, m;
-                    Str255 url;
-                    long urlLen = closeParen - (closeBracket + 2);
-
-                    for (m = i + 1; m < closeBracket; m++)
-                        (*outH)[outLen++] = (*srcH)[m];
-                    if (urlLen > 255) urlLen = 255;
-                    url[0] = (unsigned char) urlLen;
-                    BlockMove(*srcH + closeBracket + 2, url + 1, urlLen);
-                    if (opCount < MAX_STYLE_OPS) {
-                        ops[opCount].start = (short) outStart;
-                        ops[opCount].end = (short) outLen;
-                        ops[opCount].kind = 'L';
-                        ops[opCount].linkID = AddLinkURL(url);
-                        opCount++;
-                    }
-                    i = closeParen + 1;
-                    continue;
-                }
-            }
-        }
-
-        (*outH)[outLen++] = (*srcH)[i];
-        i++;
-    }
-
+    /* Inline only -- a pasted "# " stays literal, matching the old code. */
+    opts.headingMode = MD_HEADINGS_OFF;
+    opts.startsAtLineStart = 0;
+    outLen = MdStrip(*srcH, srcLen, &opts, *outH, srcLen + 1,
+                     gStripSpans, MD_MAX_SPANS, &spanCount, &gStripLinks);
     HUnlock(srcH);
+
+    /* Append the pasted links to the running global table (Writer-mode
+       links accumulate as usual), remembering the real global ID each
+       local link maps to. remap[0] stays 0 so an overflowed link renders
+       unstyled, exactly as before. */
+    remap[0] = 0;
+    for (k = 1; k <= gStripLinks.count; k++)
+        remap[k] = AddLinkURL(gStripLinks.url[k]);
 
     insertStart = (**te).selStart;
     /* Keep outH locked across TEInsert -- see BuildHiddenView. */
@@ -708,26 +504,27 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
     TESetSelect(insertStart, (short) (insertStart + outLen), te);
     TESetStyle(doFont + doFace + doSize + doColor, &baseStyle, true, te);
 
-    for (k = 0; k < opCount; k++) {
+    for (k = 0; k < spanCount; k++) {
         TextStyle opStyle;
 
-        TESetSelect((short) (insertStart + ops[k].start), (short) (insertStart + ops[k].end), te);
-        switch (ops[k].kind) {
-            case 'B':
+        TESetSelect((short) (insertStart + gStripSpans[k].start),
+                    (short) (insertStart + gStripSpans[k].end), te);
+        switch (gStripSpans[k].kind) {
+            case MD_KIND_BOLD:
                 opStyle.tsFace = bold;
                 TESetStyle(doFace, &opStyle, true, te);
                 break;
-            case 'I':
+            case MD_KIND_ITALIC:
                 opStyle.tsFace = italic;
                 TESetStyle(doFace, &opStyle, true, te);
                 break;
-            case 'C':
+            case MD_KIND_CODE:
                 GetFNum("\pMonaco", &opStyle.tsFont);
                 TESetStyle(doFont, &opStyle, true, te);
                 break;
-            case 'L':
+            case MD_KIND_LINK:
                 opStyle.tsFace = underline;
-                opStyle.tsColor.red = ops[k].linkID;
+                opStyle.tsColor.red = remap[gStripSpans[k].linkID];
                 opStyle.tsColor.green = 0;
                 opStyle.tsColor.blue = 0;
                 TESetStyle(doFace + doColor, &opStyle, true, te);
@@ -1359,7 +1156,8 @@ void ClearMarkdownInSelection(void)
     short selStart, selEnd;
     Handle outH;
     long outLen;
-    long i;
+    short spanCount;
+    MdStripOpts opts;
 
     selStart = (**gTE).selStart;
     selEnd = (**gTE).selEnd;
@@ -1370,100 +1168,29 @@ void ClearMarkdownInSelection(void)
     outH = NewHandle(selEnd - selStart + 1);
     if (outH == NULL)
         return;
-    outLen = 0;
 
     HLock(textH);
     HLock(outH);
-
-    i = selStart;
-    while (i < selEnd) {
-        if (i == 0 || (*textH)[i - 1] == '\r') {
-            short level = 0;
-            long p = i;
-
-            while (level < 3 && p < selEnd && (*textH)[p] == '#') {
-                level++;
-                p++;
-            }
-            if (level > 0 && p < selEnd && (*textH)[p] == ' ') {
-                i = p + 1;
-                continue;
-            }
-        }
-
-        if (i + 1 < selEnd && (*textH)[i] == '*' && (*textH)[i + 1] == '*') {
-            long j = i + 2;
-
-            while (j + 1 < selEnd && !((*textH)[j] == '*' && (*textH)[j + 1] == '*'))
-                j++;
-            if (j + 1 < selEnd) {
-                long k;
-
-                for (k = i + 2; k < j; k++)
-                    (*outH)[outLen++] = (*textH)[k];
-                i = j + 2;
-                continue;
-            }
-        }
-        if ((*textH)[i] == '*') {
-            long j = i + 1;
-
-            while (j < selEnd && (*textH)[j] != '*')
-                j++;
-            if (j < selEnd) {
-                long k;
-
-                for (k = i + 1; k < j; k++)
-                    (*outH)[outLen++] = (*textH)[k];
-                i = j + 1;
-                continue;
-            }
-        }
-        if ((*textH)[i] == '`') {
-            long j = i + 1;
-
-            while (j < selEnd && (*textH)[j] != '`')
-                j++;
-            if (j < selEnd) {
-                long k;
-
-                for (k = i + 1; k < j; k++)
-                    (*outH)[outLen++] = (*textH)[k];
-                i = j + 1;
-                continue;
-            }
-        }
-        if ((*textH)[i] == '[') {
-            long closeBracket = i + 1;
-
-            while (closeBracket < selEnd && (*textH)[closeBracket] != ']')
-                closeBracket++;
-            if (closeBracket < selEnd && closeBracket + 1 < selEnd && (*textH)[closeBracket + 1] == '(') {
-                long closeParen = closeBracket + 2;
-
-                while (closeParen < selEnd && (*textH)[closeParen] != ')')
-                    closeParen++;
-                if (closeParen < selEnd) {
-                    long k;
-
-                    for (k = i + 1; k < closeBracket; k++)
-                        (*outH)[outLen++] = (*textH)[k];
-                    i = closeParen + 1;
-                    continue;
-                }
-            }
-        }
-
-        (*outH)[outLen++] = (*textH)[i];
-        i++;
-    }
-
+    /* Clear formatting: strip only the "# " prefix on a heading line (its
+       body still gets inline-stripped), and use no link table. STRIP mode
+       reproduces the old loop, which skipped "# " then fell through to the
+       inline stripping. startsAtLineStart mirrors the old "i == 0 ||
+       text[i-1] == '\r'" test for the selection's first character. */
+    opts.headingMode = MD_HEADINGS_STRIP;
+    opts.startsAtLineStart = (selStart == 0) || ((*textH)[selStart - 1] == '\r');
+    outLen = MdStrip(*textH + selStart, (long) (selEnd - selStart), &opts,
+                     *outH, (long) (selEnd - selStart + 1),
+                     gStripSpans, MD_MAX_SPANS, &spanCount, (MdLinkTable *) 0);
     HUnlock(textH);
-    HUnlock(outH);
 
     TESetSelect(selStart, selEnd, gTE);
     TEDelete(gTE);
+    /* Keep outH locked across TEInsert -- see BuildHiddenView. (The old
+       code unlocked outH here before the insert too: the same latent
+       dangling-pointer bug as the other three sites, fixed by moving to
+       the shared adapter.) */
     TEInsert(*outH, outLen, gTE);
+    HUnlock(outH);
     DisposeHandle(outH);
 
     TESetSelect(selStart, (short) (selStart + outLen), gTE);

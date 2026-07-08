@@ -11,6 +11,7 @@ add_application(ArtfulType
     main.c
     scrolling.c
     markdown.c
+    mdcore.c
     undo.c
     zoom.c
     file.c
