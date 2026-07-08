@@ -126,6 +126,46 @@ short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
                     MdRun *runs, short cap);
 
 /*
+    Abstract text-face bits. A classic-Mac Style byte spells bold/italic/
+    underline with exactly this bit layout, so the adapter maps between these
+    and the Toolbox constants with a trivial 1:1 bridge -- but the pure codec
+    below (and its host test) needs no Toolbox Style type to express a face.
+*/
+#define MD_FACE_BOLD      0x01
+#define MD_FACE_ITALIC    0x02
+#define MD_FACE_UNDERLINE 0x04
+
+/*
+    The four concrete style-run fields ArtfulType packs an MdRun's attributes
+    into: a face bitmask (MD_FACE_*), a "this run is the code font" flag, and
+    the two TextStyle colour channels the app repurposes -- red carries a
+    1-based link ID (0 == no link), green carries the strike flag (no classic
+    face exists for strikethrough). This struct is deliberately Toolbox-free so
+    the round-trip below is unit-testable off the Mac.
+*/
+typedef struct {
+    short face;    /* OR of MD_FACE_*                         */
+    int   code;    /* 1 => the run uses the code (Monaco) font */
+    short linkID;  /* red channel: 1..MD_MAX_LINKS, 0 == none  */
+    int   strike;  /* green channel: 1 == struck               */
+} MdStyleFields;
+
+/*
+    The single encoding of "an MdRun's five attributes as style-run fields",
+    and its exact inverse. This is the combined-write invariant Writer mode
+    lives on: bold+strike+link must coexist in ONE field set (face carries the
+    faces, red the link ID, green the strike flag -- red and green independent),
+    and reading it back must recover every attribute. The Mac adapter
+    (ApplySpanStyles / BuildStyleRuns) moves these fields into and out of a real
+    TextStyle; extracting the packing here lets a host test prove every one of
+    the 32 attribute combinations round-trips. MdFieldsToRun leaves run->start
+    and run->end untouched (fields carry no coordinates); the caller owns those.
+    Pure: no allocation, no globals, no Toolbox.
+*/
+MdStyleFields MdRunToFields(const MdRun *run);
+void          MdFieldsToRun(const MdStyleFields *fields, MdRun *run);
+
+/*
     Emits inline markdown (**bold**, *italic*, `code`, ~~strike~~,
     [text](url)) for
     src[0..len) given `runs` that partition it -- contiguous, in order,
@@ -134,6 +174,13 @@ short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
     open (link is the outer wrapper), and everything still open is closed
     at the end. links supplies URLs for linked runs (may be NULL -> the
     URL comes out empty). Returns the number of bytes written to out.
+
+    Never writes past outCap: callers size out generously (see the adapters),
+    but because a single character can toggle all five styles -- emitting ~12
+    delimiter bytes for one content byte -- a pathologically over-styled buffer
+    could otherwise exceed any fixed n*k+c estimate and overrun the heap. When
+    the buffer fills, further bytes are dropped (the tail truncates) rather than
+    written out of bounds; the return value never exceeds outCap.
 
     This is the reverse of MdStrip and the exact per-run equivalent of the
     old per-character TEGetStyle emit loop. Pure: no globals, no Toolbox.

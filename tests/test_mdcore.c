@@ -347,6 +347,136 @@ static void test_spans_to_runs(void)
     CHECK(rn[0].link && rn[0].linkID == 7, "link run carries its id");
 }
 
+/* The pure style-field codec: every one of the 32 attribute combinations must
+   survive MdRunToFields -> MdFieldsToRun unchanged, and the link (red) and
+   strike (green) channels must stay independent. This is the combined-write
+   invariant the Mac adapter (ApplySpanStyles/BuildStyleRuns) rides on -- the
+   exact class of the bug where a second style clobbered the first. */
+static void test_style_fields_roundtrip(void)
+{
+    int combo;
+
+    for (combo = 0; combo < 32; combo++) {
+        MdRun in, out;
+        MdStyleFields f;
+
+        in.start = 11; in.end = 22;           /* codec must not touch these */
+        in.bold   = (combo & 1)  ? 1 : 0;
+        in.italic = (combo & 2)  ? 1 : 0;
+        in.code   = (combo & 4)  ? 1 : 0;
+        in.link   = (combo & 8)  ? 1 : 0;
+        in.strike = (combo & 16) ? 1 : 0;
+        in.linkID = in.link ? 7 : 0;          /* a link always has a real id */
+
+        f = MdRunToFields(&in);
+
+        out.start = out.end = -1;
+        MdFieldsToRun(&f, &out);
+
+        CHECK_EQ(out.bold, in.bold, "codec preserves bold");
+        CHECK_EQ(out.italic, in.italic, "codec preserves italic");
+        CHECK_EQ(out.code, in.code, "codec preserves code");
+        CHECK_EQ(out.link, in.link, "codec preserves link");
+        CHECK_EQ(out.strike, in.strike, "codec preserves strike");
+        CHECK_EQ(out.linkID, in.linkID, "codec preserves link id");
+    }
+}
+
+static void test_style_fields_channels_independent(void)
+{
+    MdRun in;
+    MdStyleFields f;
+
+    /* A struck link must keep BOTH channels: red carries the id, green the
+       strike, and the underline face bit rides along -- none clobbers another. */
+    in.start = 0; in.end = 1;
+    in.bold = 0; in.italic = 0; in.code = 0; in.link = 1; in.strike = 1;
+    in.linkID = 42;
+    f = MdRunToFields(&in);
+    CHECK_EQ(f.linkID, 42, "link id lands in the red channel");
+    CHECK_EQ(f.strike, 1, "strike lands in the green channel");
+    CHECK(f.face & MD_FACE_UNDERLINE, "link sets the underline face bit");
+
+    /* A non-link run must carry no id, even if some caller left junk around. */
+    in.link = 0; in.linkID = 99;
+    f = MdRunToFields(&in);
+    CHECK_EQ(f.linkID, 0, "a non-link run carries link id 0");
+}
+
+/* MdSpansToRuns must never drop a character when its run buffer overflows:
+   past cap it folds the tail into the last run (production's "unreachable"
+   safety net), and a degenerate cap==0 must return 0 without writing. */
+static void test_spans_to_runs_overflow(void)
+{
+    MdSpan sp[4];
+    MdRun rn[8];
+    short i, n;
+
+    /* Four disjoint bold words over "a b c d" (positions 0,2,4,6) flatten to
+       7 runs (word,gap,word,...); with cap 3 the tail folds into run 2. */
+    for (i = 0; i < 4; i++) {
+        sp[i].start = i * 2; sp[i].end = i * 2 + 1;
+        sp[i].kind = MD_KIND_BOLD; sp[i].level = 0; sp[i].linkID = 0;
+    }
+    n = MdSpansToRuns(7, sp, 4, rn, 3);
+    CHECK_EQ(n, 3, "overflow caps the run count at 3");
+    CHECK_EQ(rn[0].start, 0, "first run starts at 0");
+    CHECK_EQ(rn[n - 1].end, 7, "last run folds the tail to cover every char");
+
+    /* Degenerate cap: no room for even one run -> 0, and (crucially) no write
+       to rn[-1]. We can only assert the count here; the guard is what matters. */
+    n = MdSpansToRuns(5, sp, 1, rn, 0);
+    CHECK_EQ(n, 0, "cap 0 records no runs and does not underflow");
+}
+
+/* MdStrip must strip the text in full even when it runs out of span slots:
+   runs past spanCap are still removed, just not recorded (the documented
+   MAX_STYLE_OPS behaviour). */
+static void test_strip_span_cap_overflow(void)
+{
+    MdStripOpts opts;
+    MdSpan few[2];
+    short nSpans;
+    long n;
+
+    opts.headingMode = MD_HEADINGS_OFF;
+    opts.startsAtLineStart = 1;
+    /* Four italic words but room recorded for only two spans. */
+    n = MdStrip("*a* *b* *c* *d*", 15, &opts, g_out, (long) sizeof g_out,
+                few, 2, &nSpans, &g_links);
+    CHECK_STR(g_out, n, "a b c d", "all delimiters stripped despite the span cap");
+    CHECK_EQ(nSpans, 2, "only spanCap spans are recorded");
+}
+
+/* MdEmitInline must never write past outCap. Emit a heavily-styled range into
+   a deliberately tiny window inside a sentinel-filled buffer and prove the
+   bytes beyond the cap are untouched and the return value is bounded. */
+static void test_emit_respects_outcap(void)
+{
+    char buf[64];
+    MdRun runs[6];
+    long i, ret;
+    int clean = 1;
+
+    for (i = 0; i < (long) sizeof buf; i++)
+        buf[i] = (char) 0xAA;
+
+    /* Six single-char bold runs emit "**a****b**..." = 5 bytes each = 30,
+       far past the 10-byte cap. */
+    for (i = 0; i < 6; i++) {
+        runs[i].start = i; runs[i].end = i + 1;
+        runs[i].bold = 1; runs[i].italic = 0; runs[i].code = 0;
+        runs[i].link = 0; runs[i].strike = 0; runs[i].linkID = 0;
+    }
+    ret = MdEmitInline("abcdef", 6, runs, 6, (MdLinkTable *) 0, buf, 10);
+
+    CHECK(ret <= 10, "emit never returns more than outCap");
+    for (i = 10; i < (long) sizeof buf; i++)
+        if (buf[i] != (char) 0xAA)
+            clean = 0;
+    CHECK(clean, "emit writes nothing past outCap (no heap overrun)");
+}
+
 static void test_emit_combined_attributes(void)
 {
     MdRun runs[1];
@@ -396,10 +526,16 @@ int main(void)
     test_empty_italic_from_double_star();
     test_nested_strip_attributes();
     test_spans_to_runs();
+    test_spans_to_runs_overflow();
+    test_strip_span_cap_overflow();
     test_many_spans_no_truncation();
+    printf("test_mdcore (style codec):\n");
+    test_style_fields_roundtrip();
+    test_style_fields_channels_independent();
     printf("test_mdcore (emit):\n");
     test_emit_roundtrip();
     test_nested_roundtrip();
+    test_emit_respects_outcap();
     test_emit_combined_attributes();
     return TEST_RESULT();
 }

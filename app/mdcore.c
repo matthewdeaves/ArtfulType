@@ -320,6 +320,29 @@ short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
     return nRuns;
 }
 
+MdStyleFields MdRunToFields(const MdRun *run)
+{
+    MdStyleFields f;
+
+    f.face = (short) ((run->bold ? MD_FACE_BOLD : 0) |
+                      (run->italic ? MD_FACE_ITALIC : 0) |
+                      (run->link ? MD_FACE_UNDERLINE : 0));
+    f.code = run->code ? 1 : 0;
+    f.linkID = run->link ? run->linkID : 0;
+    f.strike = run->strike ? 1 : 0;
+    return f;
+}
+
+void MdFieldsToRun(const MdStyleFields *fields, MdRun *run)
+{
+    run->bold = (fields->face & MD_FACE_BOLD) != 0;
+    run->italic = (fields->face & MD_FACE_ITALIC) != 0;
+    run->code = fields->code ? 1 : 0;
+    run->link = (fields->face & MD_FACE_UNDERLINE) != 0;
+    run->strike = fields->strike ? 1 : 0;
+    run->linkID = fields->linkID;
+}
+
 long MdEmitInline(const char *src, long len,
                   const MdRun *runs, short runCount,
                   const MdLinkTable *links,
@@ -330,8 +353,14 @@ long MdEmitInline(const char *src, long len,
     unsigned char curLinkURL[256];
     short r;
 
+    /* Every write goes through PUT so the buffer can never overrun: a char that
+       toggles all five styles emits ~12 delimiter bytes, so no fixed size
+       estimate the caller passes is provably enough for an adversarial buffer.
+       When full, PUT drops the byte (truncating the tail) instead of writing
+       past outCap. Undef'd at the end of the function. */
+#define PUT(ch) do { if (outLen < outCap) out[outLen++] = (char) (ch); } while (0)
+
     (void) len;
-    (void) outCap; /* caller sizes out generously; see the adapters */
 
     curLinkURL[0] = 0;
 
@@ -358,31 +387,31 @@ long MdEmitInline(const char *src, long len,
 
         /* Close innermost-first: code, italic, bold, strike, then link (link
            is the outermost wrapper, [~~bold link~~](url)). */
-        if (inCode && !wantCode) { out[outLen++] = '`'; inCode = 0; }
-        if (inItalic && !wantItalic) { out[outLen++] = '*'; inItalic = 0; }
+        if (inCode && !wantCode) { PUT('`'); inCode = 0; }
+        if (inItalic && !wantItalic) { PUT('*'); inItalic = 0; }
         if (inBold && !wantBold) {
-            out[outLen++] = '*';
-            out[outLen++] = '*';
+            PUT('*');
+            PUT('*');
             inBold = 0;
         }
         if (inStrike && !wantStrike) {
-            out[outLen++] = '~';
-            out[outLen++] = '~';
+            PUT('~');
+            PUT('~');
             inStrike = 0;
         }
         if (inLink && !wantLink) {
             long k;
-            out[outLen++] = ']';
-            out[outLen++] = '(';
+            PUT(']');
+            PUT('(');
             for (k = 0; k < curLinkURL[0]; k++)
-                out[outLen++] = (char) curLinkURL[1 + k];
-            out[outLen++] = ')';
+                PUT(curLinkURL[1 + k]);
+            PUT(')');
             inLink = 0;
         }
 
         /* Open outermost-first: link, strike, bold, italic, code. */
         if (!inLink && wantLink) {
-            out[outLen++] = '[';
+            PUT('[');
             inLink = 1;
             if (links != 0 && linkID >= 1 && linkID <= links->count) {
                 long n = links->url[linkID][0];
@@ -395,23 +424,25 @@ long MdEmitInline(const char *src, long len,
             }
         }
         if (!inStrike && wantStrike) {
-            out[outLen++] = '~';
-            out[outLen++] = '~';
+            PUT('~');
+            PUT('~');
             inStrike = 1;
         }
         if (!inBold && wantBold) {
-            out[outLen++] = '*';
-            out[outLen++] = '*';
+            PUT('*');
+            PUT('*');
             inBold = 1;
         }
-        if (!inItalic && wantItalic) { out[outLen++] = '*'; inItalic = 1; }
-        if (!inCode && wantCode) { out[outLen++] = '`'; inCode = 1; }
+        if (!inItalic && wantItalic) { PUT('*'); inItalic = 1; }
+        if (!inCode && wantCode) { PUT('`'); inCode = 1; }
 
         for (p = runStart; p < runEnd; p++)
-            out[outLen++] = src[p];
+            PUT(src[p]);
     }
 
     return outLen;
+
+#undef PUT
 }
 
 MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justTyped)
