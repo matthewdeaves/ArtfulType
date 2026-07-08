@@ -26,6 +26,20 @@ static void SyncScrollbarToOffset(void)
 }
 
 /*
+    TEScroll repaints the scrolled text immediately but not the hand-drawn
+    strike-through line (see DrawStruckRuns), and unlike a content click it
+    posts no update event -- so every scroll path must repaint the overpaint
+    itself. A no-op outside Writer mode (gTE never carries the strike flag) and
+    a fast early-out when the document has no strike at all. Mirrors what the
+    keystroke path in main.c already does after its own ScrollCaretIntoView.
+*/
+static void RepaintStrikeAfterScroll(void)
+{
+    if (gHideMarkdown)
+        DrawStruckRuns(gActiveTE);
+}
+
+/*
     TEGetHeight(nLines, 0, te) and the two calls in ScrollCaretIntoView
     below are cumulative-from-line-0 height sums -- the form that's
     proven reliable (see the comment in ScrollCaretIntoView), but O(n)
@@ -120,6 +134,11 @@ void AdjustScrollbar(void)
         TEScroll(0, curOffset, gActiveTE);
 
     SyncScrollbarToOffset();
+
+    /* The clamp above can TEScroll; most callers InvalRect afterward, but not
+       all (zoom, save), so repaint the strike overpaint here too. Harmless
+       when nothing scrolled (early-out on no strike). */
+    RepaintStrikeAfterScroll();
 }
 
 /* lineStarts[] is sorted, so the line containing pos is found with a
@@ -212,6 +231,7 @@ static pascal void ScrollAction(ControlHandle control, short part)
 
     TEScroll(0, CurrentScrollOffset(gActiveTE) - desired, gActiveTE);
     SetControlValue(control, CurrentScrollOffset(gActiveTE));
+    RepaintStrikeAfterScroll();
 }
 
 void DoScrollClick(Point pt)
@@ -229,7 +249,10 @@ void DoScrollClick(Point pt)
         desired = GetControlValue(gScrollBar);
         TEScroll(0, CurrentScrollOffset(gActiveTE) - desired, gActiveTE);
         SyncScrollbarToOffset();
+        RepaintStrikeAfterScroll();
     } else {
+        /* ScrollAction repaints on every tick as it scrolls; nothing to add
+           here (the arrows/page regions live-scroll through that proc). */
         TrackControl(gScrollBar, pt, NewControlActionUPP(ScrollAction));
     }
 }

@@ -1,3 +1,4 @@
+#include "Types.r"       /* 'STR ' template, for the signature resource */
 #include "Finder.r"
 #include "Dialogs.r"
 #include "Processes.r"   /* SIZE resource type */
@@ -193,4 +194,18 @@ resource 'BNDL' (128) {
             1, 129
         }
     }
+};
+
+/* Signature (creator) resource. The Finder's Desktop Manager binds an app's
+   BNDL through a resource whose TYPE is the app's creator code ('ArtT'), at
+   ID 0 -- without it the BNDL never registers and the icon stays generic, no
+   matter that hasBundle is set (Inside Macintosh: Finder Interface, "Creating
+   a Signature Resource"). This is the route the System 6 boot floppy needs:
+   System 6 ignores the hasCustomIcon flag entirely (a System 7 Finder
+   feature), so the -16455 custom icon above only helps on System 7 -- the
+   Desktop-database/BNDL path is the only one that shows the typewriter icon on
+   the compact-Mac targets. Conventionally the human-readable version string. */
+type 'ArtT' as 'STR ';
+resource 'ArtT' (0, purgeable) {
+    "ArtfulType 0.2.0-alpha"
 };

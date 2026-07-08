@@ -119,6 +119,29 @@ static void SetStrikeRange(TEHandle te, long from, long to, short on)
     }
 }
 
+/* The 1:1 bridge between mdcore's Toolbox-free MD_FACE_* bits and the classic
+   Style constants. The bit layouts happen to coincide, but bridging explicitly
+   (rather than casting) keeps the pure codec's abstract bits from depending on
+   that coincidence -- the packing/round-trip invariant lives in mdcore; this
+   just renames the bits at the Toolbox boundary. */
+static Style ToolboxFaceFromMd(short mdFace)
+{
+    Style f = normal;
+    if (mdFace & MD_FACE_BOLD)      f |= bold;
+    if (mdFace & MD_FACE_ITALIC)    f |= italic;
+    if (mdFace & MD_FACE_UNDERLINE) f |= underline;
+    return f;
+}
+
+static short MdFaceFromToolbox(Style face)
+{
+    short f = 0;
+    if (face & bold)      f |= MD_FACE_BOLD;
+    if (face & italic)    f |= MD_FACE_ITALIC;
+    if (face & underline) f |= MD_FACE_UNDERLINE;
+    return f;
+}
+
 /* A level-N heading (N == 1..3) renders as bold at this size -- larger N is
    smaller. HeadingLevelForSize is the exact inverse (0 == not a heading size),
    so the Writer<->Markdown round-trip stays lossless. Keep the two paired. */
@@ -232,22 +255,23 @@ static void ApplySpanStyles(TEHandle te, short offset, long textLen,
     nRuns = MdSpansToRuns(textLen, spans, count, gEmitRuns, MD_MAX_RUNS);
     for (r = 0; r < nRuns; r++) {
         const MdRun *run = &gEmitRuns[r];
+        MdStyleFields sf;
         TextStyle st;
-        short linkID;
 
         if (!run->bold && !run->italic && !run->code && !run->link && !run->strike)
             continue;                 /* plain run: base already covers it */
 
-        linkID = run->link ? (remap ? remap[run->linkID] : run->linkID) : 0;
-        st.tsFont = run->code ? monacoFont : timesFont;
-        st.tsFace = (Style) ((run->bold ? bold : 0) |
-                             (run->italic ? italic : 0) |
-                             (run->link ? underline : 0));
+        /* One pure pack of every attribute into the style-run fields, then move
+           them onto a real TextStyle. The link ID is remapped (local->global)
+           here, the one adapter-side concern the pure codec can't own. */
+        sf = MdRunToFields(run);
+        st.tsFont = sf.code ? monacoFont : timesFont;
+        st.tsFace = ToolboxFaceFromMd(sf.face);
         st.tsSize = CurrentFontSize();
-        st.tsColor.red = linkID;         /* 0 == not a link (see SetLinkID) */
-        st.tsColor.green = run->strike ? 1 : 0;
+        st.tsColor.red = remap ? remap[sf.linkID] : sf.linkID;  /* 0 == no link */
+        st.tsColor.green = (short) (sf.strike ? 1 : 0);
         st.tsColor.blue = 0;
-        if (run->strike)
+        if (sf.strike)
             gDocHasStrike = true;
         TESetSelect((short) (offset + run->start), (short) (offset + run->end), te);
         TESetStyle(doFont + doFace + doSize + doColor, &st, true, te);
@@ -268,7 +292,9 @@ static void ApplySpanStyles(TEHandle te, short offset, long textLen,
     }
 }
 
-short AddLinkURL(const unsigned char *url)
+/* File-local: every caller (paste, live-detect, the link dialog) lives in this
+   adapter, so it needs no external linkage. */
+static short AddLinkURL(const unsigned char *url)
 {
     if (gLinkCount >= MAX_LINKS)
         return 0;
@@ -444,7 +470,7 @@ void SuppressDrawing(TEHandle te, Rect *saved)
             OFFSCREEN_COORD + 100, OFFSCREEN_COORD + 100);
 }
 
-void RestoreDrawing(TEHandle te, Rect *saved)
+void RestoreDrawing(TEHandle te, const Rect *saved)
 {
     (**te).viewRect = *saved;
 }
@@ -542,30 +568,32 @@ static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
     for (i = from; i < to; i++) {
         TextStyle st;
         short lh, fa;
-        int b, it, cd, lk, sk;
-        short id;
+        MdStyleFields sf;
+        MdRun cur;
 
+        /* Read the run's style fields off the TextStyle and unpack them with
+           the same pure codec ApplySpanStyles packs with -- the exact inverse,
+           so the Writer<->Markdown round-trip is provably lossless (see the
+           MdRunToFields/MdFieldsToRun round-trip test). */
         TEGetStyle((short) i, &st, &lh, &fa, te);
-        b = (st.tsFace & bold) != 0;
-        it = (st.tsFace & italic) != 0;
-        cd = (st.tsFont == monacoFont);
-        lk = (st.tsFace & underline) != 0;
-        sk = GetStrikeFlag(&st);
-        id = GetLinkID(&st);
+        sf.face = MdFaceFromToolbox(st.tsFace);
+        sf.code = (st.tsFont == monacoFont);
+        sf.linkID = GetLinkID(&st);
+        sf.strike = GetStrikeFlag(&st);
+        MdFieldsToRun(&sf, &cur);
 
-        if (n > 0 && runs[n - 1].bold == b && runs[n - 1].italic == it &&
-            runs[n - 1].code == cd && runs[n - 1].link == lk &&
-            runs[n - 1].strike == sk) {
+        /* Coalesce on the five style booleans only -- NOT linkID: a run keeps
+           the link ID of its first character, matching the old emit loop (which
+           captured a link's URL when it opened and ignored a mid-underline id
+           change). */
+        if (n > 0 && runs[n - 1].bold == cur.bold && runs[n - 1].italic == cur.italic &&
+            runs[n - 1].code == cur.code && runs[n - 1].link == cur.link &&
+            runs[n - 1].strike == cur.strike) {
             runs[n - 1].end = (i - from) + 1;
         } else if (n < cap) {
-            runs[n].start = i - from;
-            runs[n].end = (i - from) + 1;
-            runs[n].bold = b;
-            runs[n].italic = it;
-            runs[n].code = cd;
-            runs[n].link = lk;
-            runs[n].strike = sk;
-            runs[n].linkID = id;
+            cur.start = i - from;
+            cur.end = (i - from) + 1;
+            runs[n] = cur;
             n++;
         } else {
             /* Run table full (a line/range with >512 style changes -- not
@@ -1384,6 +1412,11 @@ void ClearMarkdownInSelection(void)
     has no strikethrough -- no per-keystroke sweep unless strike is in play.
     (Only meaningful for gHiddenTE; gTE never carries the green flag, and its
     caller in the Markdown-mode path is already gated on gHideMarkdown.)
+
+    TEScroll redraws the scrolled text immediately without posting an update
+    event, so it does NOT repaint the overpainted strike line -- every scroll
+    path (scrolling.c) calls this afterward in Writer mode, the same way the
+    keystroke path in main.c does.
 */
 void DrawStruckRuns(TEHandle te)
 {
@@ -1395,6 +1428,8 @@ void DrawStruckRuns(TEHandle te)
     short saveFont, saveFace, saveSize;
     RgnHandle saveClip;
     Rect clipR;
+    Pattern blackPat;
+    short pi;
 
     if (!gDocHasStrike)
         return;
@@ -1423,6 +1458,9 @@ void DrawStruckRuns(TEHandle te)
     saveFace = qd.thePort->txFace;
     saveSize = qd.thePort->txSize;
     PenNormal();
+    BackColor(whiteColor);
+    for (pi = 0; pi < 8; pi++)
+        blackPat.pat[pi] = 0xFF;   /* solid black, independent of qd.black init */
 
     HLock(hText);
     for (L = 0; L < nLines; L++) {
@@ -1441,7 +1479,8 @@ void DrawStruckRuns(TEHandle te)
             TextStyle st;
             short lh, fa;
             long segEnd;
-            short segFont, segFace, segSize, segAscent;
+            short segFont, segFace, segSize;
+            FontInfo fi;
             Point p;
             short x0, y, w;
 
@@ -1454,7 +1493,6 @@ void DrawStruckRuns(TEHandle te)
             segFont = st.tsFont;
             segFace = st.tsFace;
             segSize = st.tsSize;
-            segAscent = fa;
             segEnd = c + 1;
             while (segEnd < le) {
                 TextStyle st2;
@@ -1469,14 +1507,44 @@ void DrawStruckRuns(TEHandle te)
 
             p = TEGetPoint((short) c, te);
             x0 = p.h;
-            y = (short) (p.v - segAscent / 3);   /* through the x-height */
             TextFont(segFont);
             TextFace(segFace);
             TextSize(segSize);
+            /* TEGetPoint's vertical is the BOTTOM of the line, so the text
+               baseline sits one descent higher. Strike through the middle of
+               the glyph body -- about a third of the ascent above the baseline.
+               (The original code treated p.v as the baseline and used the
+               style's fontAscent, which dropped the line onto the baseline
+               where it read as an underline.) GetFontInfo reflects the font/
+               face/size just set above. */
+            GetFontInfo(&fi);
+            y = (short) (p.v - fi.descent - fi.ascent / 3);
             w = TextWidth(*hText, (short) c, (short) (segEnd - c));
             if (w > 0) {
-                MoveTo(x0, y);
-                LineTo((short) (x0 + w - 1), y);
+                /* KNOWN ISSUE (#9): on the tested emulators this line paints in
+                   white (the highlight/background colour) when the struck text is
+                   NOT selected, and black when it is -- so strikethrough is
+                   effectively invisible on white paper. The position and
+                   scroll-repaint are correct; only the colour is wrong. We
+                   re-assert every drawing attribute below (highlight bit, fore
+                   colour, solid-black pen, patCopy) as a best effort; the fill
+                   still comes out highlighted, pointing at per-run state the
+                   TextEdit calls above leave in the port under the MPW-interfaces
+                   build. The line is left in because it DOES render (just the
+                   wrong colour); the colour is tracked in issue #9.
+
+                   Re-assert the QuickDraw highlight bit: the per-run TextEdit
+                   calls (TEGetStyle/TEGetPoint) can leave the HiliteMode highlight
+                   bit CLEAR, which makes a fill paint in the highlight colour --
+                   the classic "my drawing came out highlighted" gotcha (Inside
+                   Macintosh: Imaging, Highlighting). This did not fully cure it. */
+                Rect lineRect;
+                LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
+                ForeColor(blackColor);
+                PenPat(&blackPat);
+                PenMode(patCopy);
+                SetRect(&lineRect, x0, y, (short) (x0 + w), (short) (y + 1));
+                PaintRect(&lineRect);
             }
             c = segEnd;
         }

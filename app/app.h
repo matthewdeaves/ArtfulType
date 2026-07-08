@@ -217,7 +217,7 @@ void InvalidateHeightCache(void);
 /* markdown.c */
 void ClearStyles(void);
 void SuppressDrawing(TEHandle te, Rect *saved);
-void RestoreDrawing(TEHandle te, Rect *saved);
+void RestoreDrawing(TEHandle te, const Rect *saved);
 void BuildHiddenView(void);
 void SyncHiddenToCanonical(void);
 Handle EncodeSelectionAsMarkdown(short start, short end, TEHandle te);
@@ -234,7 +234,6 @@ void DetectInlineMarkdown(char justTyped);
 void DrawStruckRuns(TEHandle te);
 void ClearSelectionStyleHidden(void);
 void ClearMarkdownInSelection(void);
-short AddLinkURL(const unsigned char *url);
 
 /* undo.c */
 void ClearUndoRedoStacks(void);
