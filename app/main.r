@@ -1,6 +1,33 @@
 #include "Finder.r"
 #include "Dialogs.r"
 
+/* MultiFinder/System 7 sizing and cooperation flags. acceptSuspendResume
+   lets the app dim/undim as it moves between foreground and background
+   (see the osEvt handler in main.c). Marked notHighLevelEventAware on
+   purpose: document opening uses the classic CountAppFiles mechanism, not
+   Apple Events, so the Finder must fall back to that rather than sending
+   an unanswered 'odoc'. */
+resource 'SIZE' (-1) {
+    reserved,
+    acceptSuspendResumeEvents,
+    reserved,
+    canBackground,
+    doesActivateOnFGSwitch,
+    backgroundAndForeground,
+    dontGetFrontClicks,
+    ignoreChildDiedEvents,
+    is32BitCompatible,
+    notHighLevelEventAware,
+    onlyLocalHLEvents,
+    notStationeryAware,
+    dontUseTextEditServices,
+    reserved,
+    reserved,
+    reserved,
+    2048 * 1024,
+    1024 * 1024
+};
+
 resource 'DITL' (130) {
     {
         {80, 204, 100, 284}, Button { enabled, "Save" },

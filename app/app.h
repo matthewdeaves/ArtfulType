@@ -80,7 +80,10 @@
 #define iZoomOut     5
 #define iZoomDefault 6
 
-#define mHelp    132
+/* The Apple menu (id 1, drawn leftmost) carries About + the desk
+   accessories. About lives here, its conventional classic-Mac home,
+   rather than in a separate Help menu. */
+#define mApple   1
 #define iAbout   1
 
 /* The pure core (mdcore.h) owns these caps; alias the app-side names to
