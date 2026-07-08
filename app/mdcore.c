@@ -711,3 +711,36 @@ MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justType
 
     return e;
 }
+
+int MdPaginate(const short *lineHeights, int nLines, int pageHeight,
+               short *pageStart, int maxPages)
+{
+    int nPages = 0;
+    int line = 0;
+
+    if (nLines <= 0 || maxPages <= 0)
+        return 0;
+    if (pageHeight < 1)
+        pageHeight = 1;                 /* degenerate: one line per page */
+
+    while (line < nLines && nPages < maxPages) {
+        long used = 0;
+
+        pageStart[nPages++] = (short) line;
+
+        /* Always place the first line (used == 0), then keep adding lines
+           until the next one would overflow the page. This guarantees
+           forward progress even for a line taller than the whole page. */
+        while (line < nLines) {
+            long h = lineHeights[line];
+            if (h < 0)
+                h = 0;
+            if (used != 0 && used + h > (long) pageHeight)
+                break;
+            used += h;
+            line++;
+        }
+    }
+
+    return nPages;
+}
