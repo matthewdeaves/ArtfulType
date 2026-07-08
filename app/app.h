@@ -51,12 +51,16 @@
 #define kEnterKey     0x03
 #define kEscapeKey    0x1B
 
-#define mFile    128
-#define iNew     1
-#define iOpen    2
-#define iSave    3
-#define iSaveAs  4
-#define iQuit    6
+#define mFile      128
+#define iNew       1
+#define iOpen      2
+#define iSave      3
+#define iSaveAs    4
+/* item 5 is a separator */
+#define iPageSetup 6
+#define iPrint     7
+/* item 8 is a separator */
+#define iQuit      9
 
 #define mEdit    131
 #define iUndo    1
@@ -97,6 +101,18 @@
 #define iAboutTitle  2
 
 #define kErrorAlert  134
+
+/* Print Options: choose the formatted Writer rendering or the raw Markdown
+   source before the standard Job dialog (see DoPrint). */
+#define kPrintOptionsDialog 135
+#define iPrintOptOK        1
+#define iPrintOptCancel    2
+#define iPrintOptFormatted 3
+#define iPrintOptSource    4
+
+/* Modeless "Printing..." status window, shown while the print loop runs so the
+   user knows Command-period cancels (Inside Macintosh II). */
+#define kPrintStatusDialog  136
 
 #define mView        130
 #define iMarkdownView 1
@@ -263,6 +279,10 @@ Boolean DoSave(void);
 Boolean ConfirmDiscardChanges(void);
 Boolean DoOpenFile(void);
 void DoNewFile(void);
+
+/* print.c */
+void DoPageSetup(void);
+void DoPrint(void);
 
 /* splash.c */
 void ShowSplashScreen(void);

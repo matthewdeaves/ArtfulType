@@ -128,6 +128,50 @@ resource 'ALRT' (134) {
     alertPositionMainScreen
 };
 
+/* Print Options: pick the formatted Writer rendering or the raw Markdown
+   source before the standard Job dialog. Two radio buttons (managed in
+   ShowPrintOptions), a Print default button and a Cancel button. */
+resource 'DITL' (135) {
+    {
+        {96, 210, 116, 290}, Button { enabled, "Print" },
+        {96, 120, 116, 200}, Button { enabled, "Cancel" },
+        {40, 30, 60, 285},  RadioButton { enabled, "Formatted (Writer view)" },
+        {66, 30, 86, 285},  RadioButton { enabled, "Markdown source" },
+        {12, 20, 32, 285},  StaticText { disabled, "Print document as:" }
+    }
+};
+
+resource 'DLOG' (135) {
+    {80, 90, 210, 400},
+    dBoxProc,
+    visible,
+    noGoAway,
+    0,
+    135,
+    "",
+    noAutoCenter
+};
+
+/* Modeless status window shown while the print loop runs. The Printing
+   Manager's default idle procedure cancels the job on Command-period; Inside
+   Macintosh II says to tell the user that option is available. */
+resource 'DITL' (136) {
+    {
+        {24, 20, 60, 300}, StaticText { disabled, "Printing.  Hold Command-period to cancel." }
+    }
+};
+
+resource 'DLOG' (136) {
+    {100, 106, 184, 426},
+    dBoxProc,
+    visible,
+    noGoAway,
+    0,
+    136,
+    "",
+    noAutoCenter
+};
+
 resource 'ICN#' (128) {
     {
         $"00000000000000000000000000000000"
