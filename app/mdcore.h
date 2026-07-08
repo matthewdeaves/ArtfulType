@@ -166,6 +166,20 @@ MdStyleFields MdRunToFields(const MdRun *run);
 void          MdFieldsToRun(const MdStyleFields *fields, MdRun *run);
 
 /*
+    A heading renders in the Writer view as bold at a size stepped up from the
+    body text: level 1 is largest, each deeper level 4pt smaller, so a level-N
+    heading (N == 1..3) is baseSize + (4 - N) * 4 points. MdHeadingLevelForSize
+    is the exact inverse -- it returns 0 for any size that is not one of those
+    heading steps -- so the Writer<->Markdown round-trip never loses or invents
+    a heading level. baseSize is the document's current body size (the app's
+    zoom size), passed in rather than read from a global so this stays a pure,
+    Toolbox-free pair the host tests exercise directly. Keep the two paired.
+    Pure: no allocation, no globals, no Toolbox.
+*/
+short MdHeadingSizeForLevel(short baseSize, short level);
+short MdHeadingLevelForSize(short baseSize, short size);
+
+/*
     Emits inline markdown (**bold**, *italic*, `code`, ~~strike~~,
     [text](url)) for
     src[0..len) given `runs` that partition it -- contiguous, in order,

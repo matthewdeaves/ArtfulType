@@ -1,11 +1,17 @@
 #include "app.h"
 
 /*
-    The visual encoding of a markdown style -- how a "kind" (bold, code,
-    heading, link, ...) becomes a concrete classic TextStyle -- lives here and
-    nowhere else. Everything below (BuildHiddenView, InsertMarkdownAsStyled, the
-    live DetectInlineMarkdown converter, the round-trip in SyncHiddenToCanonical)
-    goes through these helpers, so the encoding has exactly one home to edit.
+    This file is the Mac adapter for the markdown style engine: it locks the
+    TextEdit handles, calls the pure mdcore codec, and maps the result onto real
+    classic TextStyle runs. Two paths encode the Writer view -- ApplySpanStyles
+    paints mdcore's flattened runs through the pure MdRunToFields packing, and
+    the live DetectInlineMarkdown converter styles one just-completed span
+    through StyleForKind. Both express the same three channel conventions, and
+    each convention has one canonical helper pair to edit it: a link ID in
+    tsColor.red (Set/GetLinkID), the strike flag in tsColor.green (Set/GetStrike-
+    Flag), and a heading as bold + a stepped tsSize (SetHeadingStyle/GetHeading-
+    Level). The menu toggles (ToggleFace/ToggleCode/...) set a single field
+    directly, and a handful of "reset to plain" sites zero all channels at once.
 */
 
 /* Times and Monaco are the only two fonts the Writer view uses, and a font's
@@ -30,8 +36,12 @@ static short MonacoFont(void)
 
 /* A link's URL rides in its run's tsColor.red as a 1-based ID (0 == no link);
    see the gLinkURLs note in app.h. green/blue must stay 0 (the ID is meant to
-   be visually black). These two helpers are the only places that read or write
-   that convention, so that invariant lives in one spot. */
+   be visually black). SetLinkID/GetLinkID are the canonical readers and writers
+   of this convention; the only other writers are the full "reset to plain" sites
+   (ClearStyles, SetTypingStyleNormal, ClearSelectionStyleHidden, and the base
+   pass in ApplySpanStyles) that zero all three channels together, and Compact-
+   LinkTable, which rewrites red ALONE on purpose to preserve a struck link's
+   green channel (see its note). */
 static void SetLinkID(TextStyle *ts, short id)
 {
     ts->tsColor.red = id;
@@ -57,8 +67,9 @@ static short GetStrikeFlag(const TextStyle *ts)
 
 /* The write half of the green-channel convention (mirrors SetLinkID for red):
    sets the strike flag to 0/1 without touching red (the link ID) or blue, so
-   a struck link keeps both channels. The one place the "green carries strike,
-   independent of red" invariant is written. */
+   a struck link keeps both channels. The canonical writer of the "green carries
+   strike, independent of red" invariant; the only other writers are the full
+   reset-to-plain sites that zero all three channels at once. */
 static void SetStrikeFlag(TextStyle *ts, short on)
 {
     ts->tsColor.green = on ? 1 : 0;
@@ -142,27 +153,42 @@ static short MdFaceFromToolbox(Style face)
     return f;
 }
 
-/* A level-N heading (N == 1..3) renders as bold at this size -- larger N is
-   smaller. HeadingLevelForSize is the exact inverse (0 == not a heading size),
-   so the Writer<->Markdown round-trip stays lossless. Keep the two paired. */
+/* Body-relative heading sizes: the lossless level<->size mapping lives in the
+   pure, host-tested MdHeadingSizeForLevel/MdHeadingLevelForSize (mdcore); these
+   two just supply the document's current zoom size as the base. Keep paired. */
 static short HeadingSizeForLevel(short level)
 {
-    return CurrentFontSize() + (4 - level) * 4;
+    return MdHeadingSizeForLevel(CurrentFontSize(), level);
 }
 
 static short HeadingLevelForSize(short size)
 {
-    short level;
+    return MdHeadingLevelForSize(CurrentFontSize(), size);
+}
 
-    for (level = 1; level <= 3; level++)
-        if (size == HeadingSizeForLevel(level))
-            return level;
-    return 0;
+/* The style-level counterpart of the link/strike channel helpers: a heading is
+   encoded in a run's TextStyle as bold + a heading-sized tsSize. GetHeadingLevel
+   reports the level (1..3, or 0 when the run isn't a heading) and SetHeadingStyle
+   writes the pair, so the "bold + heading size" convention has one home, just as
+   Set/GetLinkID and Set/GetStrikeFlag do for their channels. */
+static short GetHeadingLevel(const TextStyle *ts)
+{
+    if (!(ts->tsFace & bold))
+        return 0;
+    return HeadingLevelForSize(ts->tsSize);
+}
+
+static void SetHeadingStyle(TextStyle *ts, short level)
+{
+    ts->tsFace = bold;
+    ts->tsSize = HeadingSizeForLevel(level);
 }
 
 /* Fills `ts` (and `mode`, the doFace/doFont/... mask naming which fields apply)
-   with the style for a markdown span kind. linkID is used only for a LINK. This
-   is the single forward encoding; the several TESetStyle sites share it. */
+   with the style for a markdown span kind. linkID is used only for a LINK. Used
+   by the live DetectInlineMarkdown converter to style one just-completed span;
+   the run-painting path (ApplySpanStyles) encodes through the pure MdRunToFields
+   codec instead, and the menu toggles set their one field directly. */
 static void StyleForKind(short kind, short level, short linkID,
                          TextStyle *ts, short *mode)
 {
@@ -185,8 +211,7 @@ static void StyleForKind(short kind, short level, short linkID,
         *mode = doFace + doColor;
         break;
     case MD_KIND_HEADING:
-        ts->tsFace = bold;
-        ts->tsSize = HeadingSizeForLevel(level);
+        SetHeadingStyle(ts, level);
         *mode = doFace + doSize;
         break;
     default:
@@ -268,9 +293,14 @@ static void ApplySpanStyles(TEHandle te, short offset, long textLen,
         st.tsFont = sf.code ? monacoFont : timesFont;
         st.tsFace = ToolboxFaceFromMd(sf.face);
         st.tsSize = CurrentFontSize();
-        st.tsColor.red = remap ? remap[sf.linkID] : sf.linkID;  /* 0 == no link */
-        st.tsColor.green = (short) (sf.strike ? 1 : 0);
-        st.tsColor.blue = 0;
+        /* Write both colour channels through their owners: SetLinkID sets red
+           (and clears green/blue), then SetStrikeFlag sets green -- byte-for-byte
+           the old raw red=id / green=strike / blue=0, but via the convention's
+           helpers rather than around them. Order matters (SetLinkID zeros green
+           first). The ID is remapped local->global here, the one thing the pure
+           codec can't own. */
+        SetLinkID(&st, remap ? remap[sf.linkID] : sf.linkID);   /* 0 == no link */
+        SetStrikeFlag(&st, (short) (sf.strike ? 1 : 0));
         if (sf.strike)
             gDocHasStrike = true;
         TESetSelect((short) (offset + run->start), (short) (offset + run->end), te);
@@ -283,8 +313,7 @@ static void ApplySpanStyles(TEHandle te, short offset, long textLen,
     for (k = 0; k < count; k++) {
         if (spans[k].kind == MD_KIND_HEADING) {
             TextStyle hs;
-            hs.tsFace = bold;
-            hs.tsSize = HeadingSizeForLevel(spans[k].level);
+            SetHeadingStyle(&hs, spans[k].level);
             TESetSelect((short) (offset + spans[k].start),
                         (short) (offset + spans[k].end), te);
             TESetStyle(doFace + doSize, &hs, true, te);
@@ -669,10 +698,8 @@ void SyncHiddenToCanonical(void)
             short dummyLH, dummyFA;
 
             TEGetStyle((short) lineStart, &firstStyle, &dummyLH, &dummyFA, gHiddenTE);
-            if (firstStyle.tsFace & bold) {
-                headingLevel = HeadingLevelForSize(firstStyle.tsSize);
-                isHeading = (headingLevel > 0);
-            }
+            headingLevel = GetHeadingLevel(&firstStyle);
+            isHeading = (headingLevel > 0);
         }
 
         if (isHeading) {
@@ -1218,15 +1245,14 @@ void ToggleHeadingHidden(short level)
     HUnlock(textH);
 
     TEGetStyle((short) lineStart, &ts, &lh, &fa, gHiddenTE);
-    isThisLevel = (ts.tsFace & bold) && (ts.tsSize == HeadingSizeForLevel(level));
+    isThisLevel = (GetHeadingLevel(&ts) == level);
 
     TESetSelect((short) lineStart, (short) lineEnd, gHiddenTE);
     if (isThisLevel) {
         ts.tsFace = normal;
         ts.tsSize = CurrentFontSize();
     } else {
-        ts.tsFace = bold;
-        ts.tsSize = HeadingSizeForLevel(level);
+        SetHeadingStyle(&ts, level);
     }
     TESetStyle(doFace + doSize, &ts, true, gHiddenTE);
 }

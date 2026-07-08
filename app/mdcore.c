@@ -343,6 +343,21 @@ void MdFieldsToRun(const MdStyleFields *fields, MdRun *run)
     run->linkID = fields->linkID;
 }
 
+short MdHeadingSizeForLevel(short baseSize, short level)
+{
+    return (short) (baseSize + (4 - level) * 4);
+}
+
+short MdHeadingLevelForSize(short baseSize, short size)
+{
+    short level;
+
+    for (level = 1; level <= 3; level++)
+        if (size == MdHeadingSizeForLevel(baseSize, level))
+            return level;
+    return 0;
+}
+
 long MdEmitInline(const char *src, long len,
                   const MdRun *runs, short runCount,
                   const MdLinkTable *links,
