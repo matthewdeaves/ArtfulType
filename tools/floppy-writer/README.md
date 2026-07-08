@@ -11,8 +11,9 @@ freshly written disk is ejected below.*
 
 ## Why it exists
 
-Retro68's `LaunchAPPL` can send an *application* to a Mac over the network,
-but it cannot send a data file or a disk image. So to make a physical bootable
+[Retro68](https://github.com/autc04/Retro68)'s `LaunchAPPL` can send an
+*application* to a Mac over the network, but it cannot send a data file or a
+disk image. So to make a physical bootable
 floppy on, say, a Mac SE that has only a System and the launcher, this app
 **embeds the whole 800K disk image inside itself** (as an `'ATdi'` resource)
 and writes it to an inserted floppy sector-for-sector.
@@ -46,7 +47,8 @@ driven blind over the network without a screen-share.
 
 ## Building
 
-Needs a Retro68 **m68k** toolchain and the 800K image to embed:
+Needs a Retro68 **m68k** toolchain and the 800K image to embed (build it first
+with [`build-boot-images.sh`](../../build-boot-images.sh)):
 
 ```sh
 # from this directory, after ./build-boot-images.sh has produced dist/

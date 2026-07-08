@@ -10,4 +10,6 @@ vmac/*.ini
 dist/
 build/
 .DS_Store
-.claude/
+# Ignore local Claude state, but track the shared project rules.
+.claude/*
+!.claude/rules/
