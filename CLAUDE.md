@@ -26,10 +26,11 @@ blessing, deploy scripts) loads when you touch the build/deploy files.
   run in milliseconds. Add cases there, not on the Mac side, whenever logic can
   be expressed without the Toolbox.
 - **CI**: `.github/workflows/ci.yml` runs the host tests, a real 68k build in the
-  `ghcr.io/autc04/retro68` container, and cppcheck (gated `--error-exitcode=1`).
+  `ghcr.io/matthewdeaves/retro68` container (the fork image that ships the
+  MPW/Universal interfaces — the stock `autc04/retro68` ships multiversal and
+  won't compile this source), and cppcheck (gated `--error-exitcode=1`).
 - **Warnings are errors in spirit**: the 68k build is warning-clean today; keep it
-  so. `Multiverse.h` itself emits warnings — those are third-party and out of
-  scope. cppcheck false positives are suppressed *inline with a rationale*
+  so. cppcheck false positives are suppressed *inline with a rationale*
   (see `DoLinkHidden` in `app/markdown.c`), never via a blanket ignore.
 
 ## Architecture in one breath
@@ -45,11 +46,23 @@ Two TextEdit records back every document:
 Style encoding in `gHiddenTE`'s TextEdit style runs: **bold**/**italic** = `tsFace`,
 **code** = font is Monaco, **heading** = bold + a larger `tsSize`, **link** =
 underline face + a 1-based link ID stashed in the otherwise-unused `tsColor.red`
-(1..64; 0 = no link). The ID rides the style run, so links follow their text
-through edits automatically. URLs live in `gLinkURLs[]`, keyed by that ID; the
+(1..64; 0 = no link), **strikethrough** = a flag in `tsColor.green` (1 = struck;
+QuickDraw has no strike face, so `DrawStruckRuns` overdraws the line after
+TextEdit lays the text down). red and green are independent channels, so a
+struck link keeps both. `GetLinkID`/`SetLinkID` and `GetStrikeFlag`/`SetStrikeFlag`
+own those conventions. IDs/flags ride the style run, so styling follows its text
+through edits automatically. URLs live in `gLinkURLs[]`, keyed by the ID; the
 table is rebuilt in `BuildHiddenView` and compacted by `CompactLinkTable` when
 IDs are exhausted (`MAX_LINKS` = 64).
 
-The pure engine `mdcore` (`app/mdcore.{c,h}`) does strip / emit / live-detect on
-plain buffers; `markdown.c` is the thin Mac adapter that locks handles, calls
-mdcore, and maps spans onto real `TextStyle` runs.
+**Inline styles nest.** `MdStrip` parses nested delimiters recursively, so
+`~~**x**~~`, `***x***`, `[**x**](u)` and friends round-trip through the
+Writer↔Markdown mode switch. Nested spans overlap (share stripped-text
+coordinates); the pure `MdSpansToRuns` flattens them into one combined-attribute
+run per character range, and `ApplySpanStyles` applies a single combined
+`TextStyle` per run — that one combined write is what lets bold+strike+link
+coexist without a later span clobbering an earlier face.
+
+The pure engine `mdcore` (`app/mdcore.{c,h}`) does strip / emit / span→run
+flatten / live-detect on plain buffers; `markdown.c` is the thin Mac adapter
+that locks handles, calls mdcore, and maps runs onto real `TextStyle` runs.

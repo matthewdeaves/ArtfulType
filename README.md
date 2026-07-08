@@ -7,6 +7,7 @@ A distraction-free Markdown writing app for classic 68k Macintosh computers (Sys
 ## Features
 
 - **Writer mode** — live Markdown-to-rich-text formatting as you type (bold, italic, code, strikethrough, headings, links)
+- **Combine styles** — bold, italic, code, strikethrough and links nest freely (e.g. a struck bold word, or a bold link) and survive round-tripping between Writer and Markdown mode
 - **Markdown mode** — plain raw-syntax editing
 - Links: type `[text](url)` inline, or select text and use Style → Link
 - Cut/Copy/Paste and multi-level Undo/Redo, with standard keyboard shortcuts

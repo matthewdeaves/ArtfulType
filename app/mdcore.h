@@ -18,6 +18,13 @@
 #define MD_MAX_LINKS 64
 #define MD_MAX_SPANS 512
 
+/* Upper bound on the runs MdSpansToRuns can produce from MD_MAX_SPANS spans.
+   Each span contributes at most two run boundaries (its start and end), so N
+   disjoint spans flatten to at most 2N+1 runs -- e.g. a styled word, a plain
+   gap, another styled word... A run buffer sized to this can never overflow
+   (and so never has to fold the tail into one wrong style). */
+#define MD_MAX_RUNS (2 * MD_MAX_SPANS + 1)
+
 /* A styled span, expressed in the STRIPPED text's own coordinates
    (i.e. after the delimiter characters have been removed). kind is one
    of the MD_KIND_* letters below; level is 1..3 for a heading, else 0;
@@ -27,6 +34,7 @@
 #define MD_KIND_CODE    'C'
 #define MD_KIND_LINK    'L'
 #define MD_KIND_HEADING 'H'
+#define MD_KIND_STRIKE  'S'
 
 typedef struct {
     long  start;
@@ -58,15 +66,24 @@ typedef struct {
 } MdStripOpts;
 
 /*
-    Strips markdown delimiters (**bold**, *italic*, `code`, [text](url),
-    and leading "# " headings) from src[0..len), writing the surviving
-    text to out and recording where each styled run landed.
+    Strips markdown delimiters (**bold**, *italic*, `code`, ~~strike~~,
+    ***bold italic***, [text](url), and leading "# " headings) from
+    src[0..len), writing the surviving text to out and recording where each
+    styled run landed.
+
+    Inline styles NEST: the content of a delimiter pair is itself stripped, so
+    ~~**x**~~ records a strike span AND a bold span over the same "x", a linked
+    [**x**](u) records link + bold, and ***x*** records bold + italic. Nested
+    spans therefore OVERLAP (share stripped-text coordinates); a consumer that
+    needs one attribute set per character coalesces them with MdSpansToRuns.
+    (Headings are line-level and never nest inside inline styles.)
 
     - out must have room for at least len bytes (stripping never grows the
       text). Returns the stripped length written to out.
     - spans receives up to spanCap styled runs; *spanCount gets the count.
       Runs past spanCap are still stripped, just not recorded (matching the
-      old MAX_STYLE_OPS behaviour).
+      old MAX_STYLE_OPS behaviour). With nesting a single character can be
+      covered by several spans, so a heavily nested doc uses spans faster.
     - links receives the URLs found (reset to empty first). Pass NULL if the
       caller doesn't need them (e.g. "clear formatting"); link text is still
       stripped, spans just carry linkID 0.
@@ -79,9 +96,9 @@ long MdStrip(const char *src, long len, const MdStripOpts *opts,
              MdLinkTable *links);
 
 /* A maximal run of identically-styled characters (in src coordinates).
-   The four attributes combine freely -- a run can be bold + italic + code
-   + link all at once -- exactly as classic TextEdit reports a styled run.
-   linkID indexes an MdLinkTable when link is set. */
+   The five attributes combine freely -- a run can be bold + italic + code
+   + link + strike all at once -- exactly as classic TextEdit reports a
+   styled run. linkID indexes an MdLinkTable when link is set. */
 typedef struct {
     long  start;
     long  end;
@@ -89,17 +106,81 @@ typedef struct {
     int   italic;
     int   code;
     int   link;
+    int   strike;
     short linkID;
 } MdRun;
 
 /*
-    Emits inline markdown (**bold**, *italic*, `code`, [text](url)) for
+    Flattens the (possibly overlapping, single-kind) spans MdStrip produces
+    over textLen stripped characters into a contiguous list of maximal
+    same-style MdRuns -- the multi-attribute view TextEdit and MdEmitInline
+    both want. For each character it ORs together the attributes of every
+    span covering it (so a char inside ~~**x**~~ comes out bold AND strike),
+    carries the linkID of whatever LINK span covers it, then coalesces equal
+    neighbours. HEADING spans are line-level, carry no inline attribute, and
+    are ignored here (the adapter applies them separately). Writes up to `cap`
+    runs, folding any overflow into the last run so no character is dropped;
+    returns the run count. Pure: no allocation, no globals, no Toolbox.
+*/
+short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
+                    MdRun *runs, short cap);
+
+/*
+    Abstract text-face bits. A classic-Mac Style byte spells bold/italic/
+    underline with exactly this bit layout, so the adapter maps between these
+    and the Toolbox constants with a trivial 1:1 bridge -- but the pure codec
+    below (and its host test) needs no Toolbox Style type to express a face.
+*/
+#define MD_FACE_BOLD      0x01
+#define MD_FACE_ITALIC    0x02
+#define MD_FACE_UNDERLINE 0x04
+
+/*
+    The four concrete style-run fields ArtfulType packs an MdRun's attributes
+    into: a face bitmask (MD_FACE_*), a "this run is the code font" flag, and
+    the two TextStyle colour channels the app repurposes -- red carries a
+    1-based link ID (0 == no link), green carries the strike flag (no classic
+    face exists for strikethrough). This struct is deliberately Toolbox-free so
+    the round-trip below is unit-testable off the Mac.
+*/
+typedef struct {
+    short face;    /* OR of MD_FACE_*                         */
+    int   code;    /* 1 => the run uses the code (Monaco) font */
+    short linkID;  /* red channel: 1..MD_MAX_LINKS, 0 == none  */
+    int   strike;  /* green channel: 1 == struck               */
+} MdStyleFields;
+
+/*
+    The single encoding of "an MdRun's five attributes as style-run fields",
+    and its exact inverse. This is the combined-write invariant Writer mode
+    lives on: bold+strike+link must coexist in ONE field set (face carries the
+    faces, red the link ID, green the strike flag -- red and green independent),
+    and reading it back must recover every attribute. The Mac adapter
+    (ApplySpanStyles / BuildStyleRuns) moves these fields into and out of a real
+    TextStyle; extracting the packing here lets a host test prove every one of
+    the 32 attribute combinations round-trips. MdFieldsToRun leaves run->start
+    and run->end untouched (fields carry no coordinates); the caller owns those.
+    Pure: no allocation, no globals, no Toolbox.
+*/
+MdStyleFields MdRunToFields(const MdRun *run);
+void          MdFieldsToRun(const MdStyleFields *fields, MdRun *run);
+
+/*
+    Emits inline markdown (**bold**, *italic*, `code`, ~~strike~~,
+    [text](url)) for
     src[0..len) given `runs` that partition it -- contiguous, in order,
     covering every character. Delimiters open and close as the run
     attributes change, innermost-first on close and outermost-first on
     open (link is the outer wrapper), and everything still open is closed
     at the end. links supplies URLs for linked runs (may be NULL -> the
     URL comes out empty). Returns the number of bytes written to out.
+
+    Never writes past outCap: callers size out generously (see the adapters),
+    but because a single character can toggle all five styles -- emitting ~12
+    delimiter bytes for one content byte -- a pathologically over-styled buffer
+    could otherwise exceed any fixed n*k+c estimate and overrun the heap. When
+    the buffer fills, further bytes are dropped (the tail truncates) rather than
+    written out of bounds; the return value never exceeds outCap.
 
     This is the reverse of MdStrip and the exact per-run equivalent of the
     old per-character TEGetStyle emit loop. Pure: no globals, no Toolbox.
@@ -145,8 +226,9 @@ typedef struct {
     Live "type the markdown, get the formatting" detector for Writer mode.
     Given the whole buffer, its length, the caret (selEnd, just past the
     inserted character) and the character justTyped, decides whether that
-    keystroke completed **bold**, *italic*, `code`, [text](url), or a
-    leading "# " heading, and returns the edit plan above. Pure: it reads
+    keystroke completed **bold**, *italic*, `code`, ~~strike~~,
+    [text](url), or a leading "# " heading, and returns the edit plan
+    above. Pure: it reads
     buf but mutates nothing. '\r' is handled by the adapter, not here.
 */
 MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justTyped);
