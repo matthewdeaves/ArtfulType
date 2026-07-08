@@ -10,6 +10,123 @@ short AddLinkURL(const unsigned char *url)
 }
 
 /*
+    Reclaims link IDs orphaned when their underlined text was deleted or
+    re-styled. gLinkURLs / gLinkCount are otherwise reset only by a full
+    BuildHiddenView (a reparse of gTE), so a long Writer-mode session of
+    adding and removing links would march gLinkCount monotonically to
+    MAX_LINKS and then start silently dropping new links.
+
+    This rebuilds the table from the IDs still referenced by a run in
+    gHiddenTE -- renumbering them 1..N and rewriting each surviving link
+    run's ID -- so only live links occupy the table. The ID lives in a
+    run's tsColor.red (a value 1..64, visually indistinguishable from
+    black), so recolouring never changes the display.
+
+    Call only when gHiddenTE is coherent (never mid-insert). Preserves the
+    caret/selection. Not reentrant: uses file-scope scratch, like the other
+    adapters here.
+*/
+static Str255 gCompactURLs[MAX_LINKS + 1];
+
+static short CompactLinkTable(void)
+{
+    short remap[MAX_LINKS + 1];   /* old ID -> new ID; 0 == unreferenced */
+    short newCount = 0;
+    long len = (**gHiddenTE).teLength;
+    short savedStart = (**gHiddenTE).selStart;
+    short savedEnd = (**gHiddenTE).selEnd;
+    long i;
+    short k;
+
+    /* Both passes call TEGetStyle per character over the whole document,
+       which on real 68000 hardware is slow enough on a long document to be
+       worth a watch cursor -- same reasoning as BuildHiddenView. This only
+       runs at the genuine 64-link cap, so the cost is rare. */
+    SetCursor(*GetCursor(watchCursor));
+
+    for (k = 0; k <= gLinkCount; k++)
+        remap[k] = 0;
+
+    /* Pass 1: give each still-referenced ID a fresh 1..N number, in order
+       of first appearance, copying its URL aside. */
+    for (i = 0; i < len; i++) {
+        TextStyle st;
+        short lh, fa, id;
+
+        TEGetStyle((short) i, &st, &lh, &fa, gHiddenTE);
+        id = st.tsColor.red;
+        if ((st.tsFace & underline) && id >= 1 && id <= gLinkCount &&
+            remap[id] == 0) {
+            newCount++;
+            remap[id] = newCount;
+            BlockMove(gLinkURLs[id], gCompactURLs[newCount],
+                      gLinkURLs[id][0] + 1);
+        }
+    }
+
+    if (newCount == gLinkCount) {
+        InitCursor();
+        return gLinkCount;   /* nothing orphaned -- no rewrite needed */
+    }
+
+    /* Pass 2: walk maximal (underline, id) runs and rewrite the ID of any
+       link run whose number actually changed. redraw = false: the colour
+       is an imperceptible link ID, so nothing on screen moves. */
+    i = 0;
+    while (i < len) {
+        TextStyle st;
+        short lh, fa, id;
+        long runEnd;
+        int underlined;
+
+        TEGetStyle((short) i, &st, &lh, &fa, gHiddenTE);
+        id = st.tsColor.red;
+        underlined = (st.tsFace & underline) != 0;
+
+        runEnd = i + 1;
+        while (runEnd < len) {
+            TextStyle st2;
+            short lh2, fa2;
+
+            TEGetStyle((short) runEnd, &st2, &lh2, &fa2, gHiddenTE);
+            if (((st2.tsFace & underline) != 0) != underlined ||
+                st2.tsColor.red != id)
+                break;
+            runEnd++;
+        }
+
+        if (underlined && id >= 1 && id <= gLinkCount && remap[id] != id) {
+            TextStyle ns;
+
+            ns.tsColor.red = remap[id];
+            ns.tsColor.green = 0;
+            ns.tsColor.blue = 0;
+            TESetSelect((short) i, (short) runEnd, gHiddenTE);
+            TESetStyle(doColor, &ns, false, gHiddenTE);
+        }
+        i = runEnd;
+    }
+
+    /* Publish the compacted table and restore the user's selection. */
+    for (k = 1; k <= newCount; k++)
+        BlockMove(gCompactURLs[k], gLinkURLs[k], gCompactURLs[k][0] + 1);
+    gLinkCount = newCount;
+
+    TESetSelect(savedStart, savedEnd, gHiddenTE);
+    InitCursor();
+    return newCount;
+}
+
+/* Make room for at least one more link before adding it, reclaiming
+   orphaned IDs from gHiddenTE only when the table is actually full so the
+   common case pays nothing. Call only when gHiddenTE is coherent. */
+static void EnsureLinkRoom(void)
+{
+    if (gLinkCount >= MAX_LINKS)
+        CompactLinkTable();
+}
+
+/*
     Markdown mode shows raw syntax with no visual styling at all -- just
     plain uniform text at the current zoom size. Selection is preserved
     since this gets called after Style-menu edits that already placed
@@ -423,6 +540,12 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
     TextStyle baseStyle;
     short fontNum;
     MdStripOpts opts;
+    Boolean droppedLink = false;
+
+    /* Only ever called in Writer mode, where te == gHiddenTE. Reclaim any
+       orphaned link IDs before appending the pasted ones, so pasting into
+       a link-heavy document doesn't needlessly exhaust the table. */
+    EnsureLinkRoom();
 
     outH = NewHandle(srcLen + 1);
     if (outH == NULL)
@@ -442,8 +565,11 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
        local link maps to. remap[0] stays 0 so an overflowed link renders
        unstyled, exactly as before. */
     remap[0] = 0;
-    for (k = 1; k <= gStripLinks.count; k++)
+    for (k = 1; k <= gStripLinks.count; k++) {
         remap[k] = AddLinkURL(gStripLinks.url[k]);
+        if (remap[k] == 0)
+            droppedLink = true;
+    }
 
     insertStart = (**te).selStart;
     /* Keep outH locked across TEInsert -- see BuildHiddenView. */
@@ -492,6 +618,11 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
     }
 
     TESetSelect((short) (insertStart + outLen), (short) (insertStart + outLen), te);
+
+    /* The text pasted fine; only some of its links couldn't be tracked. Say
+       so rather than leave a few underlines silently pointing nowhere. */
+    if (droppedLink)
+        ShowError("\pSome pasted links weren't kept: this document is at ArtfulType's 64-link limit.");
 }
 
 void WrapSelection(char *prefix, char *suffix)
@@ -733,9 +864,19 @@ void DoLinkHidden(void)
 
     if (ShowLinkURLDialog(url)) {
         TextStyle ts;
+        short id;
 
+        EnsureLinkRoom();
+        id = AddLinkURL(url);
+        if (id == 0) {
+            /* Genuinely out of link slots even after reclaiming dead ones:
+               this document really does have 64 live links. Tell the user
+               rather than apply an underline with no URL behind it. */
+            ShowError("\pThis document already has the most links ArtfulType can track (64).");
+            return;
+        }
         ts.tsFace = underline;
-        ts.tsColor.red = AddLinkURL(url);
+        ts.tsColor.red = id;
         ts.tsColor.green = 0;
         ts.tsColor.blue = 0;
         TESetStyle(doFace + doColor, &ts, true, gHiddenTE);
@@ -878,6 +1019,9 @@ void DetectInlineMarkdown(char justTyped)
         TESetStyle(doFont, &ts, true, gHiddenTE);
         break;
     case MD_KIND_LINK:
+        /* CompactLinkTable preserves the selection we just set above, so
+           it is safe to reclaim room here before claiming an ID. */
+        EnsureLinkRoom();
         ts.tsFace = underline;
         ts.tsColor.red = AddLinkURL(e.linkURL);
         ts.tsColor.green = 0;
