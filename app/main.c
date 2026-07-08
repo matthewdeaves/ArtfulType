@@ -400,6 +400,31 @@ static void EventLoop(void)
     }
 }
 
+/*
+    True on System 7.0 and later. A handful of Toolbox routines this app
+    uses are System 7 additions -- FindFolder and the FSSpec resource
+    calls (the Preferences-folder path in zoom.c), and
+    SetDialogDefaultItem/SetDialogCancelItem (the link dialog). On System 6
+    those are unimplemented traps and a 68000 Mac executes the A-line as a
+    bad instruction and drops into the debugger -- confirmed live: an
+    "unimplemented trap" crash at startup on a real Mac SE running 6.0.8,
+    from FindFolder in LoadZoomPref. Gate every such call on this so the
+    app still runs on the System 6 compact Macs it targets. SysEnvirons is
+    the pre-Gestalt environment call and is itself safe all the way back,
+    so it's the right probe. The answer can't change during a run; cache it.
+*/
+Boolean HasSystem7(void)
+{
+    static short cached = -1;   /* -1 = not yet probed, 0 = no, 1 = yes */
+
+    if (cached < 0) {
+        SysEnvRec env;
+        cached = (SysEnvirons(1, &env) == noErr &&
+                  env.systemVersion >= 0x0700) ? 1 : 0;
+    }
+    return (Boolean) (cached != 0);
+}
+
 int main(void)
 {
     short message, count;

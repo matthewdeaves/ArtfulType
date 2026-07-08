@@ -43,6 +43,13 @@ static short OpenPrefsFile(Boolean createIfMissing)
     long dirID;
     FSSpec spec;
 
+    /* FindFolder and the FSSpec resource calls below are System 7 traps.
+       On System 6 (e.g. the Mac SE) they are unimplemented and crash the
+       machine, so skip persistence there -- a missing pref just leaves the
+       baseline zoom untouched, which is already the documented behavior. */
+    if (!HasSystem7())
+        return -1;
+
     err = FindFolder(kOnSystemDisk, kPreferencesFolderType, createIfMissing,
                      &vRefNum, &dirID);
     if (err != noErr)

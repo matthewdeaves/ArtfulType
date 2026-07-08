@@ -874,8 +874,14 @@ static Boolean ShowLinkURLDialog(unsigned char *url)
     if (dlg == NULL)
         return false;
 
-    SetDialogDefaultItem(dlg, iLinkOK);
-    SetDialogCancelItem(dlg, iLinkCancel);
+    /* SetDialogDefaultItem/SetDialogCancelItem are System 7 traps and are
+       unimplemented on System 6. LinkDialogFilter handles Return/Escape
+       regardless, so on System 6 we only forgo the default button's heavy
+       outline, not the keyboard behavior. */
+    if (HasSystem7()) {
+        SetDialogDefaultItem(dlg, iLinkOK);
+        SetDialogCancelItem(dlg, iLinkCancel);
+    }
     SelectDialogItemText(dlg, iLinkField, 0, 32767);
 
     filter = NewModalFilterUPP(LinkDialogFilter);

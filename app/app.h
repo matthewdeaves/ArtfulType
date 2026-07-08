@@ -178,6 +178,7 @@ extern short gLinkCount;
 
 /* main.c */
 void UpdateMenuBarLook(void);
+Boolean HasSystem7(void);
 
 /* scrolling.c */
 void UpdateScrollbarRange(void);
