@@ -1423,6 +1423,57 @@ void ClearMarkdownInSelection(void)
 }
 
 /*
+    Runs one Style-menu command through its whole lifecycle -- the block the
+    menu dispatcher (DoMenuCommand) used to inline, moved behind this seam so
+    main.c just routes to it like every other menu. Every style op dirties the
+    document, snapshots for undo, and ends the current typing run; it then
+    dispatches to the mode-appropriate handler (real TextStyle edits on
+    gHiddenTE in Writer mode, delimiter-text edits on gTE in Markdown mode) and
+    repaints. In Writer mode the repaint goes through InvalRect because a toggle
+    may have added or removed a strikethrough overlay the native TESetStyle
+    redraw doesn't know about; in Markdown mode ClearStyles restores the plain,
+    uniform look after the delimiter edit.
+*/
+void DoStyleCommand(short menuItem)
+{
+    gDirty = true;
+    PushUndoSnapshot();
+    gTypingRunActive = false;
+    if (gHideMarkdown) {
+        switch (menuItem) {
+            case iBold:   ToggleFace(bold); break;
+            case iItalic: ToggleFace(italic); break;
+            case iCode:   ToggleCode(); break;
+            case iStrike: ToggleStrike(); break;
+            case iH1:     ToggleHeadingHidden(1); break;
+            case iH2:     ToggleHeadingHidden(2); break;
+            case iH3:     ToggleHeadingHidden(3); break;
+            case iLink:   DoLinkHidden(); break;
+            case iNone:   ClearSelectionStyleHidden(); break;
+        }
+        /* Any of these may have added or removed a strike-through, and the
+           native TESetStyle redraw doesn't know about the overpainted line.
+           Repaint the content so the line is drawn (or an erased one cleared)
+           through the normal update path. */
+        InvalRect(&gWindow->portRect);
+    } else {
+        switch (menuItem) {
+            case iBold:   WrapSelection("**", "**"); break;
+            case iItalic: WrapSelection("*", "*"); break;
+            case iCode:   WrapSelection("`", "`"); break;
+            case iStrike: WrapSelection("~~", "~~"); break;
+            case iH1:     ApplyHeading(1); break;
+            case iH2:     ApplyHeading(2); break;
+            case iH3:     ApplyHeading(3); break;
+            case iLink:   DoLink(); break;
+            case iNone:   ClearMarkdownInSelection(); break;
+        }
+        ClearStyles();
+    }
+    AdjustScrollbar();
+}
+
+/*
     Paints the strike-through line over every struck run (tsColor.green == 1)
     visible in te's view. Strike is not a native text face, so TextEdit never
     draws it; this is called immediately after TextEdit lays the text down (in

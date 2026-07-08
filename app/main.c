@@ -218,41 +218,7 @@ static void DoMenuCommand(long menuResult)
             }
         }
     } else if (menuID == mStyle) {
-        gDirty = true;
-        PushUndoSnapshot();
-        gTypingRunActive = false;
-        if (gHideMarkdown) {
-            switch (menuItem) {
-                case iBold:   ToggleFace(bold); break;
-                case iItalic: ToggleFace(italic); break;
-                case iCode:   ToggleCode(); break;
-                case iStrike: ToggleStrike(); break;
-                case iH1:     ToggleHeadingHidden(1); break;
-                case iH2:     ToggleHeadingHidden(2); break;
-                case iH3:     ToggleHeadingHidden(3); break;
-                case iLink:   DoLinkHidden(); break;
-                case iNone:   ClearSelectionStyleHidden(); break;
-            }
-            /* Any of these may have added or removed a strike-through, and the
-               native TESetStyle redraw doesn't know about the overpainted
-               line. Repaint the content so the line is drawn (or an erased
-               one cleared) through the normal update path. */
-            InvalRect(&gWindow->portRect);
-        } else {
-            switch (menuItem) {
-                case iBold:   WrapSelection("**", "**"); break;
-                case iItalic: WrapSelection("*", "*"); break;
-                case iCode:   WrapSelection("`", "`"); break;
-                case iStrike: WrapSelection("~~", "~~"); break;
-                case iH1:     ApplyHeading(1); break;
-                case iH2:     ApplyHeading(2); break;
-                case iH3:     ApplyHeading(3); break;
-                case iLink:   DoLink(); break;
-                case iNone:   ClearMarkdownInSelection(); break;
-            }
-            ClearStyles();
-        }
-        AdjustScrollbar();
+        DoStyleCommand(menuItem);
     } else if (menuID == mView) {
         switch (menuItem) {
             case iMarkdownView: SetViewMode(false); break;
