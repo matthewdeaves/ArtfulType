@@ -14,9 +14,27 @@
 #include <Files.h>
 #include <StandardFile.h>
 #include <SegLoad.h>
-#include <Multiverse.h>
+#include <Controls.h>
+#include <ControlDefinitions.h>
+#include <Sound.h>
+#include <Scrap.h>
+#include <Resources.h>
+#include <Devices.h>
+#include <Folders.h>
+#include <Gestalt.h>
+#include <Errors.h>
 #include <string.h>
 #include "mdcore.h"
+
+/* Standard desk-accessory Edit-menu command numbers passed to SystemEdit when a
+   DA is frontmost. Apple's Universal Interfaces don't define these (the
+   multiversal interfaces did), so provide them here. */
+#ifndef undoCmd
+#define undoCmd  1
+#define cutCmd   3
+#define copyCmd  4
+#define pasteCmd 5
+#endif
 
 #define MARGIN_H     64
 #define MARGIN_TOP   32

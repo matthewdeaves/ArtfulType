@@ -40,8 +40,11 @@ jobs:
   build-app:
     name: Build the 68k application
     runs-on: ubuntu-latest
-    # Official Retro68 image: the only environment with the m68k toolchain.
-    container: ghcr.io/autc04/retro68
+    # Our Retro68 fork's image ships Apple's MPW/Universal interfaces as the
+    # toolchain default, which the 382d4cf port requires (the stock
+    # autc04/retro68 ships multiversal and won't compile this source). Public,
+    # so no registry login is needed.
+    container: ghcr.io/matthewdeaves/retro68:latest
     steps:
       - uses: actions/checkout@v4
       - name: Build ArtfulType.bin

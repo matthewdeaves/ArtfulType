@@ -2,8 +2,13 @@
 
 A distraction-free Markdown editor for classic 68k Macs (System 6/7), built
 to run from a BlueSCSI on a compact Mac. Cross-compiled with **Retro68** using
-its **multiversal** interfaces (not Apple's universal ones — some API and
-constant names differ; everything lands in one generated `Multiverse.h`).
+**Apple's MPW/Universal interfaces** (the real Apple headers, extracted from the
+Retro68 fork's `resources/MPW_Interfaces.zip` by its `setup.sh`). Because those
+headers gate the classic Toolbox spellings the code uses (`inThumb`,
+`inUpButton`, …) behind `OLDROUTINENAMES`, `app/CMakeLists.txt` sets
+`OLDROUTINENAMES=1`. Include the specific manager headers (`<Controls.h>`,
+`<Scrap.h>`, …), not a single umbrella. (History: the project originally built
+against Retro68's open-source *multiversal* interfaces and `Multiverse.h`.)
 
 Deeper, path-scoped notes live in `.claude/rules/` and load only when relevant:
 [`classic-mac-toolbox`](.claude/rules/classic-mac-toolbox.md) (Toolbox pitfalls —
