@@ -122,7 +122,6 @@ void ShowSplashScreen(void)
 
         DisposeDialog(dlg);
         SetPort(gWindow);
-        UpdateMenuBarLook();
 
         /* Open Document, then Cancel in the file picker -- show the splash again */
         done = (item == iSplashNew) || DoOpenFile();
@@ -155,5 +154,4 @@ void ShowAboutBox(void)
 
     DisposeDialog(dlg);
     SetPort(gWindow);
-    UpdateMenuBarLook();
 }

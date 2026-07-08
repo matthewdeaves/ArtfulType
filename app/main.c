@@ -44,35 +44,6 @@ static void Init(void)
     InitCursor();
 }
 
-/*
-    Writer mode gets a black menu bar with white text; Markdown mode gets
-    the standard look. There's no Menu Manager API for this on classic Mac
-    OS (that's a much later Appearance Manager concept) -- on a 1-bit
-    display, drawing the normal bar and then XOR-inverting that strip
-    achieves the same thing trivially. Must target the Window Manager
-    port (global screen coordinates), not whatever window's port happens
-    to be current, since the menu bar isn't part of any window.
-*/
-void UpdateMenuBarLook(void)
-{
-    GrafPtr savePort;
-    GrafPtr wMgrPort;
-    Rect bar;
-
-    DrawMenuBar();
-
-    if (gHideMarkdown) {
-        GetPort(&savePort);
-        GetWMgrPort(&wMgrPort);
-        SetPort(wMgrPort);
-
-        SetRect(&bar, 0, 0, qd.screenBits.bounds.right, MENU_BAR_HEIGHT);
-        InvertRect(&bar);
-
-        SetPort(savePort);
-    }
-}
-
 static void MakeMenu(void)
 {
     MenuHandle appleMenu;
@@ -110,7 +81,30 @@ static void MakeMenu(void)
     InsertMenu(gViewMenu, 0);
     CheckItem(gViewMenu, iWriterView, true);
 
-    UpdateMenuBarLook();
+    DrawMenuBar();
+
+    /*
+        Drop the Help ("?") menu for a cleaner, distraction-free bar. On
+        System 7 the Menu Manager's MBDF auto-inserts up to three system menus
+        at the right -- the Application (switcher) menu, the Help menu, and,
+        only when more than one script system is installed, a Keyboard menu.
+        The first DrawMenuBar above is what makes the MBDF's "calc" routine add
+        them (it does so whenever an Apple menu is present and no system menus
+        are yet in the list). DeleteMenu then removes the Help menu; the second
+        DrawMenuBar repaints without it. It stays gone because the Application
+        menu -- which Inside Macintosh VI says is "always displayed" and cannot
+        be removed -- keeps a system menu present, so "calc" never re-adds the
+        full set. We deliberately keep the Application menu (the user wants the
+        switcher) and the Apple menu. DeleteMenu/DrawMenuBar are original traps,
+        safe on every target; gate on System 7 only because System 6 has no Help
+        menu to remove (see HasSystem7). The menu-bar clock (System 7.5+) is not
+        a menu -- it is redrawn on a timer by the Date & Time control panel and
+        has no Toolbox off-switch, so it can only be turned off there.
+    */
+    if (HasSystem7()) {
+        DeleteMenu(kHMHelpMenuID);
+        DrawMenuBar();
+    }
 }
 
 static void MakeWindow(void)
@@ -258,10 +252,6 @@ static void DoMenuCommand(long menuResult)
         }
     }
     HiliteMenu(0);
-    /* HiliteMenu un-hilites the clicked title assuming the Menu Manager's
-       own standard white-bar/black-text look, which clobbers our inverted
-       Writer-mode bar -- reassert it now that the menu has closed. */
-    UpdateMenuBarLook();
 }
 
 /*

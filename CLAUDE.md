@@ -49,13 +49,6 @@ mdcore, and maps spans onto real `TextStyle` runs.
   charCodeMask` for an option-accented character is ≥ 0x80 and sign-extends to
   negative, misclassifying as a control key. See the `keyDown` handler in `main.c`.
 
-- **The Writer-mode menu bar is hand-inverted.** There's no Menu Manager API for a
-  black menu bar on System 6/7, so `UpdateMenuBarLook` draws the normal bar then
-  XOR-inverts it on the **Window Manager port**. Anything that lets the Menu
-  Manager repaint the bar — `HiliteMenu(0)` after a menu pick, an alert, a
-  StandardFile call — clobbers the inversion, so call `UpdateMenuBarLook()` again
-  afterward. That's why it's sprinkled after dialogs.
-
 - **Restore the port.** Disposing a dialog/window doesn't restore the caller's
   `thePort`; the event loop defensively `SetPort(gWindow)` each pass, and dialog
   helpers do it explicitly. Leaving `thePort` at freed memory is a latent crash.
@@ -116,6 +109,22 @@ mdcore, and maps spans onto real `TextStyle` runs.
   keystrokes on `FrontWindow() == gWindow` so the app never draws into or types
   through a DA's window. All of this is a no-op on the System 7 targets where DAs
   live in their own layer. See `main.c`.
+
+- **The right side of the menu bar belongs to the system.** On System 7 the Menu
+  Manager auto-inserts up to three system menus at the right: the Application
+  (switcher) menu, the Help (`?`) menu, and — only when more than one script
+  system is installed — a Keyboard menu. The **Application menu is *always
+  displayed* and cannot be removed** (Inside Macintosh VI, "With the System
+  Menus"). The Help/Keyboard icons *can* be dropped: after the bar is first drawn
+  (the `DrawMenuBar` in `MakeMenu` is what makes the MBDF's *calc* routine insert
+  them), `DeleteMenu(kHMHelpMenuID)` + a second `DrawMenuBar` removes the Help
+  menu, and it stays gone because the ever-present Application menu keeps *calc*
+  from re-adding the full set (it only re-adds when *no* system menus remain).
+  Gate on `HasSystem7()` — System 6 has no Help menu to remove. The **System 7.5+
+  menu-bar clock is *not* a menu**: it's redrawn on a timer by the Date & Time
+  control panel (the folded-in SuperClock) and has no Toolbox off-switch, so it
+  can only be turned off there — an app cannot hide just the clock without hiding
+  the whole bar. See `MakeMenu` in `main.c`.
 
 - **Modal text dialogs need a filter proc.** `ModalDialog(NULL, …)` gives no
   Return-confirms / Escape-cancels. The link dialog installs a `ModalFilterUPP`

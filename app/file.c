@@ -8,7 +8,6 @@ void ShowError(StringPtr msg)
     ParamText(msg, "\p", "\p", "\p");
     InitCursor();
     Alert(kErrorAlert, NULL);
-    UpdateMenuBarLook();
 }
 
 /* True if inserting addLen characters (replacing the current selection)
@@ -48,7 +47,6 @@ void SetViewMode(Boolean hideMarkdown)
     gHideMarkdown = hideMarkdown;
     CheckItem(gViewMenu, iMarkdownView, !hideMarkdown);
     CheckItem(gViewMenu, iWriterView, hideMarkdown);
-    UpdateMenuBarLook();
     AdjustScrollbar();
     InvalRect(&gWindow->portRect);
 }
@@ -166,7 +164,6 @@ Boolean DoSaveAs(void)
         SyncHiddenToCanonical();
 
     SFPutFile(where, "\pSave document as:", "\pUntitled.md", NULL, &reply);
-    UpdateMenuBarLook();
     if (!reply.good)
         return false;
 
@@ -207,7 +204,6 @@ static short AskSaveChanges(void)
         ParamText("\pUntitled", "\p", "\p", "\p");
 
     hit = Alert(kSaveChangesAlert, NULL);
-    UpdateMenuBarLook();
     return hit;
 }
 
@@ -232,7 +228,6 @@ Boolean DoOpenFile(void)
     types[0] = 'TEXT';
 
     SFGetFile(where, "\p", NULL, 1, types, NULL, &reply);
-    UpdateMenuBarLook();
     if (!reply.good)
         return false;
 
