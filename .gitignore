@@ -5,6 +5,9 @@ vmac/*.ini
 *.img
 *.iso
 *.hda
+# ...except the committed System 6 base volume the disk builder blesses from.
+!disk-base/system6.dsk
+dist/
 build/
 .DS_Store
 .claude/
