@@ -247,4 +247,27 @@ typedef struct {
 */
 MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justTyped);
 
+/*
+    Greedy page-break planner for printing a document whose lines have VARYING
+    heights (headings are taller than body text, so a page holds a variable
+    number of lines and can't be a fixed line count). Given each line's pixel
+    height, in order, and the printable height of one page, fills pageStart[]
+    with the 0-based index of the first line on each page and returns the page
+    count.
+
+    Each page takes as many whole lines as fit within pageHeight; a line is
+    never split across pages, and a single line taller than the whole page
+    still gets a page to itself (so progress is always made). Writes at most
+    maxPages entries. If the document needs more than maxPages pages the count
+    is clamped to maxPages and no further pages are recorded -- callers drawing
+    the last page as lines [pageStart[last] .. end) still cover every line (the
+    tail just overflows one page rather than being dropped); a returned count
+    equal to maxPages signals that clamp.
+
+    Pure: no allocation, no globals, no Toolbox. lineHeights may be NULL only
+    when nLines <= 0.
+*/
+int MdPaginate(const short *lineHeights, int nLines, int pageHeight,
+               short *pageStart, int maxPages);
+
 #endif /* MDCORE_H */
