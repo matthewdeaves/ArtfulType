@@ -38,7 +38,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install cppcheck
-        run: sudo apt-get update && sudo apt-get install -y cppcheck
+        # A broken third-party apt repo on the hosted runner (e.g.
+        # packages.microsoft.com returning an invalid InRelease) must not block
+        # installing a package that lives in Ubuntu's own repos. Drop the
+        # non-Ubuntu lists first, then a plain `update` only hits archive.ubuntu.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                     /etc/apt/sources.list.d/azure-cli.list \
+                     /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
       # --error-exitcode=1 makes any finding fail the build. Toolbox system
       # headers aren't present here, so missingInclude(System) are suppressed
       # wholesale (they're noise, not defects). --inline-suppr honours the
