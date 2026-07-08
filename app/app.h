@@ -89,6 +89,12 @@
 #define mApple   1
 #define iAbout   1
 
+/* System 7's Menu Manager auto-inserts a Help ("?") system menu at the right
+   end of the bar. This is its well-known menu ID; we DeleteMenu it for a
+   cleaner, distraction-free bar (see MakeMenu). Not defined by the multiversal
+   headers, so it lives here. */
+#define kHMHelpMenuID (-16490)
+
 /* The pure core (mdcore.h) owns these caps; alias the app-side names to
    the single source of truth so the two never drift apart. */
 #define MAX_STYLE_OPS MD_MAX_SPANS
@@ -177,7 +183,6 @@ extern Str255 gLinkURLs[MAX_LINKS + 1];
 extern short gLinkCount;
 
 /* main.c */
-void UpdateMenuBarLook(void);
 Boolean HasSystem7(void);
 
 /* scrolling.c */
