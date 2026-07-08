@@ -94,6 +94,10 @@ void BuildHiddenView(void)
     srcH = (**gTE).hText;
     len = (**gTE).teLength;
     outH = NewHandle(len + 1);
+    if (outH == NULL) {
+        InitCursor();
+        return;
+    }
     outLen = 0;
 
     HLock(srcH);
@@ -225,13 +229,17 @@ void BuildHiddenView(void)
     }
 
     HUnlock(srcH);
-    HUnlock(outH);
 
     SuppressDrawing(gHiddenTE, &savedViewRect);
 
     TESetSelect(0, 32767, gHiddenTE);
     TEDelete(gHiddenTE);
+    /* outH must stay locked across TEInsert: TEInsert allocates from the
+       heap and can relocate blocks, and *outH is the source it copies
+       from -- unlocking first would leave that pointer dangling
+       (Inside Macintosh I, "lock the block before dereferencing"). */
     TEInsert(*outH, outLen, gHiddenTE);
+    HUnlock(outH);
     DisposeHandle(outH);
 
     GetFNum("\pTimes", &fontNum);
@@ -316,6 +324,10 @@ void SyncHiddenToCanonical(void)
         urlSpace += gLinkURLs[li][0];
     outCap = len * 2 + 64 + urlSpace;
     outH = NewHandle(outCap);
+    if (outH == NULL) {
+        InitCursor();
+        return;
+    }
     outLen = 0;
 
     GetFNum("\pMonaco", &monacoFont);
@@ -425,13 +437,14 @@ void SyncHiddenToCanonical(void)
     }
 
     HUnlock(srcH);
-    HUnlock(outH);
 
     SuppressDrawing(gTE, &savedViewRect);
 
     TESetSelect(0, 32767, gTE);
     TEDelete(gTE);
+    /* Keep outH locked across TEInsert -- see BuildHiddenView. */
     TEInsert(*outH, outLen, gTE);
+    HUnlock(outH);
     DisposeHandle(outH);
 
     ClearStyles();
@@ -486,6 +499,8 @@ Handle EncodeSelectionAsMarkdown(short start, short end, TEHandle te)
         urlSpace += gLinkURLs[li][0];
     outCap = (long) (end - start) * 2 + 64 + urlSpace;
     outH = NewHandle(outCap);
+    if (outH == NULL)
+        return NULL;
     outLen = 0;
 
     GetFNum("\pMonaco", &monacoFont);
@@ -567,6 +582,8 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
     short fontNum;
 
     outH = NewHandle(srcLen + 1);
+    if (outH == NULL)
+        return;
     outLen = 0;
 
     HLock(srcH);
@@ -672,10 +689,11 @@ void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te)
     }
 
     HUnlock(srcH);
-    HUnlock(outH);
 
     insertStart = (**te).selStart;
+    /* Keep outH locked across TEInsert -- see BuildHiddenView. */
     TEInsert(*outH, outLen, te);
+    HUnlock(outH);
     DisposeHandle(outH);
 
     /* TEInsert's new text inherits whatever style was at the
@@ -755,6 +773,8 @@ void WrapSelection(char *prefix, char *suffix)
     if (outerWrapped) {
         /* markers sit just outside the selection -- strip them (toggle off) */
         newH = NewHandle(selLen);
+        if (newH == NULL)
+            return;
         HLock(newH);
         HLock(textH);
         BlockMove(*textH + selStart, *newH, selLen);
@@ -775,6 +795,8 @@ void WrapSelection(char *prefix, char *suffix)
         long innerLen = selLen - prefixLen - suffixLen;
 
         newH = NewHandle(innerLen);
+        if (newH == NULL)
+            return;
         HLock(newH);
         HLock(textH);
         BlockMove(*textH + selStart + prefixLen, *newH, innerLen);
@@ -791,6 +813,8 @@ void WrapSelection(char *prefix, char *suffix)
 
     totalLen = prefixLen + selLen + suffixLen;
     newH = NewHandle(totalLen);
+    if (newH == NULL)
+        return;
     HLock(newH);
     HLock(textH);
     BlockMove(prefix, *newH, prefixLen);
@@ -867,6 +891,8 @@ void DoLink(void)
 
     totalLen = 1 + selLen + midLen;
     newH = NewHandle(totalLen);
+    if (newH == NULL)
+        return;
     HLock(newH);
     HLock(textH);
     (*newH)[0] = '[';
@@ -1342,6 +1368,8 @@ void ClearMarkdownInSelection(void)
 
     textH = (**gTE).hText;
     outH = NewHandle(selEnd - selStart + 1);
+    if (outH == NULL)
+        return;
     outLen = 0;
 
     HLock(textH);
