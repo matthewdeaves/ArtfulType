@@ -862,6 +862,11 @@ void DoLinkHidden(void)
     if ((**gHiddenTE).selStart == (**gHiddenTE).selEnd)
         return;
 
+    /* ShowLinkURLDialog fills `url` (via GetDialogItemText) before it
+       returns true, and `url` is read only inside this if-body -- i.e.
+       only on the path where it was written. cppcheck can't see across
+       the call, so it flags a false positive on the next line. */
+    /* cppcheck-suppress uninitvar ; url is written by ShowLinkURLDialog */
     if (ShowLinkURLDialog(url)) {
         TextStyle ts;
         short id;
