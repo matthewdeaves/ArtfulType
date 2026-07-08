@@ -382,6 +382,37 @@ static void test_style_fields_roundtrip(void)
     }
 }
 
+/* The heading level<->size mapping the Writer view rides on: a level 1..3
+   heading is baseSize + (4 - level) * 4, and the inverse recovers the level
+   exactly while rejecting every non-heading size -- the round-trip that keeps
+   the Writer<->Markdown switch from losing or inventing heading levels. */
+static void test_heading_size_level_roundtrip(void)
+{
+    short base, level;
+
+    /* Round-trips across a spread of body (zoom) sizes: each heading size maps
+       back to the level that produced it, and is always larger than the body. */
+    for (base = 9; base <= 36; base++) {
+        for (level = 1; level <= 3; level++) {
+            short size = MdHeadingSizeForLevel(base, level);
+            CHECK(size > base, "a heading is larger than the body size");
+            CHECK_EQ(MdHeadingLevelForSize(base, size), level,
+                     "size recovers its heading level");
+        }
+    }
+
+    /* Concrete steps at an 18pt body: 4pt per level, level 1 the largest. */
+    CHECK_EQ(MdHeadingSizeForLevel(18, 1), 30, "H1 at 18pt body is 30pt");
+    CHECK_EQ(MdHeadingSizeForLevel(18, 2), 26, "H2 at 18pt body is 26pt");
+    CHECK_EQ(MdHeadingSizeForLevel(18, 3), 22, "H3 at 18pt body is 22pt");
+
+    /* The body size itself is not a heading, nor is an in-between or off-by-one
+       size -- the inverse must return 0 so plain text never reads as a heading. */
+    CHECK_EQ(MdHeadingLevelForSize(18, 18), 0, "body size is not a heading");
+    CHECK_EQ(MdHeadingLevelForSize(18, 24), 0, "a non-step size is not a heading");
+    CHECK_EQ(MdHeadingLevelForSize(18, 31), 0, "an off-by-one size is not a heading");
+}
+
 static void test_style_fields_channels_independent(void)
 {
     MdRun in;
@@ -531,6 +562,7 @@ int main(void)
     test_many_spans_no_truncation();
     printf("test_mdcore (style codec):\n");
     test_style_fields_roundtrip();
+    test_heading_size_level_roundtrip();
     test_style_fields_channels_independent();
     printf("test_mdcore (emit):\n");
     test_emit_roundtrip();
