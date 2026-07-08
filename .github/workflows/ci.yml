@@ -57,10 +57,13 @@ jobs:
   build-68k:
     name: 68k application build
     runs-on: ubuntu-latest
-    # Official Retro68 image, rebuilt whenever Retro68 master moves. Public,
-    # so no registry login is needed. Ships the multiversal interfaces and
-    # the m68k toolchain file referenced below.
-    container: ghcr.io/autc04/retro68
+    # Our Retro68 fork's image (public, no login needed). It ships Apple's
+    # MPW/Universal interfaces as the toolchain default -- which ArtfulType now
+    # builds against (see the 382d4cf port: individual manager headers instead
+    # of the multiversal Multiverse.h umbrella, TEGetPoint returning Point, and
+    # OLDROUTINENAMES=1). The stock ghcr.io/autc04/retro68 image ships the
+    # multiversal interfaces instead and will NOT compile this source.
+    container: ghcr.io/matthewdeaves/retro68:latest
     steps:
       - uses: actions/checkout@v4
       - name: Configure

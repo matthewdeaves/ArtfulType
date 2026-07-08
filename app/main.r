@@ -1,5 +1,7 @@
 #include "Finder.r"
 #include "Dialogs.r"
+#include "Processes.r"   /* SIZE resource type */
+#include "Icons.r"       /* ICN# resource type */
 
 /* MultiFinder/System 7 sizing and cooperation flags. acceptSuspendResume
    lets the app dim/undim as it moves between foreground and background

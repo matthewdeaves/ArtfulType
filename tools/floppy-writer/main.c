@@ -46,7 +46,10 @@
 #include <Resources.h>
 #include <Files.h>
 #include <Devices.h>
-#include <Multiverse.h>
+#include <TextEdit.h>   /* TEInit */
+#include <DiskInit.h>   /* DILoad/DIFormat/DIVerify/DIUnload */
+#include <Sound.h>      /* SysBeep */
+#include <LowMem.h>     /* LMGetDrvQHdr (drive queue low-memory global) */
 #include <string.h>
 
 /* --- resources (writer.r.in) ------------------------------------------- */
@@ -235,10 +238,12 @@ static void ReportErr(ConstStr255Param what, OSErr err)
 
 /* Find the .Sony (or external floppy) driver refNum for a given drive number
    by walking the drive queue. The queue header lives at a fixed low-memory
-   address; reading it directly needs no glue and works on every System. */
+   address; reading it directly needs no glue and works on every System.
+   Under the Universal interfaces LMGetDrvQHdr() yields a QHdrPtr (the old
+   multiversal spelling returned the header by value), hence the -> here. */
 static short DriverForDrive(short drive)
 {
-    DrvQEl *dqe = (DrvQEl *) LMGetDrvQHdr().qHead;
+    DrvQEl *dqe = (DrvQEl *) LMGetDrvQHdr()->qHead;
 
     while (dqe != NULL) {
         if (dqe->dQDrive == drive)

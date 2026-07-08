@@ -386,9 +386,9 @@ static void EventLoop(void)
                        it again on resume, so switching to the Finder actually
                        reveals the Finder. ShowWindow/HideWindow are original
                        traps, and this osEvt only arrives under MultiFinder. */
-                    if (((unsigned long) event.message & 0xFF000000UL) ==
-                            SUSPENDRESUMEBITS) {
-                        if (event.message & RESUME) {
+                    if ((((unsigned long) event.message >> 24) & 0xFF) ==
+                            suspendResumeMessage) {
+                        if (event.message & resumeFlag) {
                             ShowWindow(gWindow);
                             SetWindowActive(true);
                         } else {
