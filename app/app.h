@@ -231,6 +231,7 @@ void ToggleCode(void);
 void ToggleStrike(void);
 void ToggleHeadingHidden(short level);
 void DetectInlineMarkdown(char justTyped);
+void DoStyleCommand(short menuItem);
 void DrawStruckRuns(TEHandle te);
 void ClearSelectionStyleHidden(void);
 void ClearMarkdownInSelection(void);
