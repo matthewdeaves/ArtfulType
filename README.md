@@ -12,6 +12,7 @@ A distraction-free Markdown writing app for classic 68k Macintosh computers (Sys
 - Cut/Copy/Paste and multi-level Undo/Redo, with standard keyboard shortcuts
 - Adjustable zoom, remembered between launches
 - Save/Open plain Markdown files via the classic File Manager
+- A well-behaved classic app: About and desk accessories in the Apple menu, MultiFinder-friendly (dims quietly in the background), zoom preference stored in the system Preferences folder
 
 Video overview: [Artful Type demo](https://youtu.be/HEheu_r9UGw)
 
@@ -52,6 +53,7 @@ Saved files are plain `.md` text, editable in any text editor.
 | Quit | ⌘Q |
 | Undo / Redo | ⌘Z / ⇧⌘Z |
 | Cut / Copy / Paste | ⌘X / ⌘C / ⌘V |
+| Select All | ⌘A |
 | Bold / Italic / Code | ⌘B / ⌘I / ⌘K |
 | Heading 1 / 2 / 3 | ⌘1 / ⌘2 / ⌘3 |
 | Link | ⌘L |
