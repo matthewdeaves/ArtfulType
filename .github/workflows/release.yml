@@ -72,7 +72,17 @@ jobs:
       - name: Install hfsutils + djjr
         run: |
           set -eu
-          sudo apt-get update && sudo apt-get install -y hfsutils
+          # A broken third-party apt repo on the hosted runner (e.g.
+          # packages.microsoft.com returning an invalid InRelease) makes
+          # `apt-get update` exit non-zero and, under `set -e`, aborts before
+          # hfsutils installs (hformat then "not found on PATH" downstream).
+          # hfsutils lives in Ubuntu's universe repo, so drop the non-Ubuntu
+          # lists first and `update` only hits archive.ubuntu.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                     /etc/apt/sources.list.d/azure-cli.list \
+                     /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
+          sudo apt-get update
+          sudo apt-get install -y hfsutils
           curl -fsSL -o /tmp/djjr.tgz "$DJJR_URL"
           sudo tar -xzf /tmp/djjr.tgz -C /usr/local/bin djjr
           sudo chmod +x /usr/local/bin/djjr
