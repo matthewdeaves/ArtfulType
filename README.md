@@ -17,7 +17,7 @@ One document, two views toggled from the View menu — **Writer** (Markdown rend
 - **Print** — Page Setup and Print through the classic Printing Manager, on System 6 and System 7 ★
 - **Links** — type `[text](url)` inline, or select text → Style → Link
 - Cut/Copy/Paste with Markdown preserved, and 15 levels of Undo/Redo
-- Adjustable zoom, remembered between launches
+- Adjustable zoom, remembered between launches (on System 7 — see below)
 - A well-behaved classic app — Apple-menu About and desk accessories, MultiFinder-friendly, preferences in the System folder
 
 ★ = new in this fork.
@@ -28,7 +28,7 @@ Beyond the features marked above, this is a near-total engineering rework under 
 
 - **A pure, testable core.** The Markdown strip / emit / detect / paginate logic lives in `mdcore` — Toolbox-free C, run under a host unit-test harness and gated by **CI** (host tests, `cppcheck`, and a real 68k build on every push).
 - **Correctness & robustness.** Hardened Memory Manager usage, a guarded 32K TextEdit limit that stops silent save failures, and reclaimed link IDs so long sessions don't exhaust the table.
-- **System 6 again.** System 7-only traps are gated behind a runtime version check, so it runs on real hardware like a Mac SE.
+- **Runs on System 6, not just 7.** System 7-only Toolbox traps are gated behind a runtime version check, so ArtfulType works on original 68000 hardware like the Mac SE. (Zoom persistence is one of those System 7 calls, so it's the one feature that sits out on System 6.)
 - **Ported to Apple's MPW/Universal interfaces** — the real Apple headers, not the open-source multiversal ones.
 - **Bootable disk images built on Linux — no Mac.** Volumes are formatted and *blessed* entirely in software: an 800K floppy (raw + DiskCopy 4.2), a 20 MB volume, and a BlueSCSI/PiSCSI `.hda`. A tag-triggered workflow builds and publishes them all.
 - **[floppy-writer](tools/floppy-writer/)** — a tiny companion app that writes a bootable ArtfulType floppy from a bare Mac (e.g. a Mac SE with only a System), so hardware with no other tooling can make its own boot disk.
