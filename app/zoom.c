@@ -379,6 +379,10 @@ static pascal void PrefPopupDraw(DialogPtr dlg, short item)
     MoveTo(box.right, box.top + 2);
     LineTo(box.right, box.bottom);
 
+    /* label is filled by PrefPopupText (via PStrCopy) before DrawString reads
+       it; cppcheck can't see the write through the BlockMove and flags a false
+       uninitvar, the same pattern as find.c's PStrCopy sites. */
+    /* cppcheck-suppress uninitvar ; label is written by PrefPopupText */
     PrefPopupText(which, gPrefVals[which], label);
     MoveTo(box.left + 8, box.bottom - 6);
     DrawString(label);
@@ -440,6 +444,7 @@ void DoPreferences(void)
     gPrefMenus[3] = NewMenu(kPrefMenuBase + 3, "\p");
     for (i = 0; i < kNumZoomLevels; i++) {
         Str255 lbl;
+        /* cppcheck-suppress uninitvar ; lbl is written by PrefPopupText */
         PrefPopupText(3, i, lbl);
         AppendMenu(gPrefMenus[3], lbl);
     }
