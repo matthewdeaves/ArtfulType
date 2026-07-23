@@ -122,6 +122,11 @@ static Boolean ReadFile(StringPtr name, short vRefNum)
     FSRead(refNum, &count, *textH);
     FSClose(refNum);
 
+    /* Clean up an imported file in place: strip a UTF-8 BOM, fold CRLF/LF to the
+       Mac CR line ending, and convert UTF-8 smart punctuation / accents to
+       MacRoman. Only ever shrinks, so the kMaxTELength check above still holds. */
+    count = MdNormalizeImport(*textH, count);
+
     TESetSelect(0, 32767, gTE);
     TEDelete(gTE);
     TEInsert(*textH, count, gTE);
@@ -151,6 +156,7 @@ void DoStartupOpen(void)
         BlockMove(theFile.fName, gFileName, theFile.fName[0] + 1);
         gVRefNum = theFile.vRefNum;
         gHaveFile = true;
+        UpdateWindowTitle();
     }
     ClrAppFiles(1);
 }
@@ -175,6 +181,7 @@ Boolean DoSaveAs(void)
         return false;
     }
     gDirty = false;
+    UpdateWindowTitle();
     return true;
 }
 
@@ -236,6 +243,7 @@ Boolean DoOpenFile(void)
     BlockMove(reply.fName, gFileName, reply.fName[0] + 1);
     gVRefNum = reply.vRefNum;
     gHaveFile = true;
+    UpdateWindowTitle();
     return true;
 }
 
@@ -249,5 +257,6 @@ void DoNewFile(void)
     UpdateEditMenuState();
     RefreshActiveView();
     AdjustScrollbar();
+    UpdateWindowTitle();
     InvalRect(&gWindow->portRect);
 }

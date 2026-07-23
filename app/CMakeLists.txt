@@ -15,6 +15,7 @@ add_application(ArtfulType
     undo.c
     zoom.c
     file.c
+    find.c
     print.c
     splash.c
     main.r

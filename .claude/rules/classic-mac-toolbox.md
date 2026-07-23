@@ -37,14 +37,22 @@ pure core (`app/mdcore.{c,h}`) is Toolbox-free and not subject to them.
   must. Documents are bounded to `kMaxTELength` (20000, leaving headroom for the
   delimiters re-added in Markdown mode); `DocCanGrowBy` gates every insert/paste.
 
-- **Preferences go in the Preferences folder, never the app's own resource fork.**
+- **Preferences go in the System Folder, never the app's own resource fork.**
   ArtfulType runs from read-only media (a write-locked 800K floppy, a BlueSCSI
-  image), where writing back into the running app silently fails. `zoom.c` uses
-  `FindFolder` + a small resource file, opens read-only to *load* (works on a
-  locked volume) and read/write to *save*, and saves/restores `CurResFile()`
+  image), where writing back into the running app silently fails. `zoom.c`
+  (`OpenPrefsFile`) uses a small resource file, opens read-only to *load* (works
+  on a locked volume) and read/write to *save*, and saves/restores `CurResFile()`
   around every access so the app's own fork stays current for other `GetResource`
-  callers. `FindFolder` and the FSSpec calls are System 7 only, so `OpenPrefsFile`
-  bails via `HasSystem7()` on System 6 — the zoom simply doesn't persist there.
+  callers. **Location forks by OS (ADR 0002):** System 7 uses `FindFolder` +
+  the FSSpec resource calls (both System 7 traps, gated on `HasSystem7()`) to put
+  the file in the *Preferences folder*; System 6 has no such folder, so it locates
+  the blessed *System Folder* via the `BootDrive` low-memory global
+  (`LMGetBootDrive`, `$0210`) and drops the file loose there with original traps
+  (`SetVol`/`Create`/`CreateResFile`/`OpenResFile`/`OpenRFPerm`). So preferences
+  now persist on **both** System 6 and 7 (the old "zoom doesn't persist on 6"
+  limitation is gone). All settings ride one versioned `'Pref'` record. Related:
+  the Preferences dialog's pop-ups use `PopUpMenuSelect` (System-6-safe), **not**
+  the pop-up control CDEF, which is System 7 only.
 
 - **System 7-only traps crash the System 6 targets — gate them on `HasSystem7()`.**
   The Mac SE runs System 6.0.8, and on a 68000 an unimplemented A-line trap is not

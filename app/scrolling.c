@@ -35,8 +35,10 @@ static void SyncScrollbarToOffset(void)
 */
 static void RepaintStrikeAfterScroll(void)
 {
-    if (gHideMarkdown)
+    if (gHideMarkdown) {
+        DrawHighlightRuns(gActiveTE);
         DrawStruckRuns(gActiveTE);
+    }
 }
 
 /*
@@ -204,6 +206,35 @@ void ScrollCaretIntoView(void)
         TEScroll(0, viewTop - lineTop, gActiveTE);
 
     SyncScrollbarToOffset();
+}
+
+/*
+    Home/End/Page Up/Page Down scroll the view (they do not move the insertion
+    point -- the Mac convention for these keys in a text window). Returns true if
+    `key` was one of them and was handled, so the caller can skip inserting it as
+    a control character. ADR 0003.
+*/
+Boolean ScrollByKey(unsigned char key)
+{
+    short max = GetControlMaximum(gScrollBar);
+    short page = (**gActiveTE).viewRect.bottom - (**gActiveTE).viewRect.top;
+    short cur = CurrentScrollOffset(gActiveTE);
+    short desired = cur;
+
+    switch (key) {
+        case kHomeKey:     desired = 0; break;
+        case kEndKey:      desired = max; break;
+        case kPageUpKey:   desired = cur - page; break;
+        case kPageDownKey: desired = cur + page; break;
+        default:           return false;
+    }
+
+    if (desired < 0) desired = 0;
+    if (desired > max) desired = max;
+    TEScroll(0, cur - desired, gActiveTE);
+    SyncScrollbarToOffset();
+    RepaintStrikeAfterScroll();
+    return true;
 }
 
 static pascal void ScrollAction(ControlHandle control, short part)

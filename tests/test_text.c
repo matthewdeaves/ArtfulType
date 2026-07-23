@@ -1,0 +1,95 @@
+/*
+ * test_text.c -- host tests for the plain-text helpers added in ADR 0003:
+ * MdNormalizeImport, MdFind, MdWordCount. Pure buffer functions, so they run
+ * off the Mac exactly as they do on it.
+ */
+#include <string.h>
+#include "mdcore.h"
+#include "test_util.h"
+
+/* Copy a byte string (which may contain NUL-free high bytes) into a writable
+   buffer and normalize it in place; compare against expected bytes. */
+static void check_norm(const char *in, long inLen,
+                       const char *want, long wantLen, const char *msg)
+{
+    char buf[256];
+    long out;
+    memcpy(buf, in, (size_t) inLen);
+    out = MdNormalizeImport(buf, inLen);
+    g_checks++;
+    if (out != wantLen || memcmp(buf, want, (size_t) wantLen) != 0) {
+        g_fails++;
+        printf("  FAIL: %s: got len %ld want %ld\n", msg, out, wantLen);
+    }
+}
+
+static void test_normalize(void)
+{
+    printf("test_text (MdNormalizeImport):\n");
+
+    /* Line endings: CRLF and lone LF both fold to CR. */
+    check_norm("a\r\nb", 4, "a\rb", 3, "CRLF -> CR");
+    check_norm("a\nb", 3, "a\rb", 3, "LF -> CR");
+    check_norm("a\rb", 3, "a\rb", 3, "CR unchanged");
+
+    /* UTF-8 BOM stripped. */
+    check_norm("\xEF\xBB\xBF" "hi", 5, "hi", 2, "BOM stripped");
+
+    /* Smart punctuation -> MacRoman. */
+    check_norm("\xE2\x80\x99", 3, "\xD5", 1, "right single quote");
+    check_norm("\xE2\x80\x9C" "x\xE2\x80\x9D", 7, "\xD2" "x\xD3", 3, "double quotes");
+    check_norm("\xE2\x80\x94", 3, "\xD1", 1, "em dash");
+    check_norm("\xE2\x80\xA6", 3, "\xC9", 1, "ellipsis");
+    check_norm("\xE2\x80\xA2", 3, "\xA5", 1, "bullet");
+
+    /* Accented letter: e-acute U+00E9 -> 0x8E. */
+    check_norm("caf\xC3\xA9", 5, "caf\x8E", 4, "e-acute");
+
+    /* Unknown code point -> '?'. U+2603 SNOWMAN (E2 98 83). */
+    check_norm("\xE2\x98\x83", 3, "?", 1, "unknown -> ?");
+
+    /* Already-MacRoman high byte with no valid continuation passes through:
+       0xD5 (') followed by ASCII 's'. */
+    check_norm("\xD5s", 2, "\xD5s", 2, "MacRoman passthrough");
+
+    /* Plain ASCII untouched. */
+    check_norm("hello world", 11, "hello world", 11, "ascii untouched");
+}
+
+static void test_find(void)
+{
+    const char *hay = "The quick Brown fox";
+    long n = (long) strlen(hay);
+
+    printf("test_text (MdFind):\n");
+
+    CHECK_EQ(MdFind(hay, n, "quick", 5, 0, 1), 4, "find quick");
+    CHECK_EQ(MdFind(hay, n, "QUICK", 5, 0, 1), -1, "case-sensitive miss");
+    CHECK_EQ(MdFind(hay, n, "QUICK", 5, 0, 0), 4, "case-insensitive hit");
+    CHECK_EQ(MdFind(hay, n, "brown", 5, 0, 0), 10, "ci brown");
+    CHECK_EQ(MdFind(hay, n, "o", 1, 0, 1), 12, "first o");
+    CHECK_EQ(MdFind(hay, n, "o", 1, 13, 1), 17, "next o from 13");
+    CHECK_EQ(MdFind(hay, n, "xyz", 3, 0, 1), -1, "no match");
+    CHECK_EQ(MdFind(hay, n, "The", 3, 0, 1), 0, "match at start");
+    CHECK_EQ(MdFind(hay, n, "", 0, 0, 1), -1, "empty needle");
+}
+
+static void test_wordcount(void)
+{
+    printf("test_text (MdWordCount):\n");
+
+    CHECK_EQ(MdWordCount("", 0), 0, "empty");
+    CHECK_EQ(MdWordCount("   ", 3), 0, "spaces only");
+    CHECK_EQ(MdWordCount("hello", 5), 1, "one word");
+    CHECK_EQ(MdWordCount("hello world", 11), 2, "two words");
+    CHECK_EQ(MdWordCount("  a  b  c  ", 11), 3, "padded");
+    CHECK_EQ(MdWordCount("a\rb\nc\td", 7), 4, "mixed whitespace");
+}
+
+int main(void)
+{
+    test_normalize();
+    test_find();
+    test_wordcount();
+    return TEST_RESULT();
+}

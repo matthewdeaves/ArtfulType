@@ -12,13 +12,17 @@ Video overview: [Artful Type demo](https://youtu.be/HEheu_r9UGw)
 
 One document, two views toggled from the View menu — **Writer** (Markdown rendered live as styled text) and **Markdown** (the raw source). Saved files are always plain `.md`, editable anywhere.
 
-- **Live styling** — bold, italic, `code`, headings, links, and **strikethrough**, as you type or from the Style menu ★
-- **Styles nest and combine** — a struck bold word, a bold link, `***bold italic***` — round-tripping losslessly between Writer and Markdown ★
+- **Live styling** — bold, italic, `code`, headings, links, **strikethrough**, and **`==highlight==`**, as you type or from the Style menu ★
+- **Styles nest and combine** — a struck bold word, a bold link, a highlighted phrase, `***bold italic***` — round-tripping losslessly between Writer and Markdown ★
 - **Print** — Page Setup and Print through the classic Printing Manager, on System 6 and System 7 ★
 - **Links** — type `[text](url)` inline, or select text → Style → Link
-- Cut/Copy/Paste with Markdown preserved, and 15 levels of Undo/Redo
-- Adjustable zoom, remembered between launches (on System 7 — see below)
-- A well-behaved classic app — Apple-menu About and desk accessories, MultiFinder-friendly, preferences in the System folder
+- **Full-screen or windowed** — stay in the distraction-free full-screen page, or switch to a real resizable, draggable window from the View menu ★
+- **A real Preferences dialog** — set the default window mode, view, body font, and zoom; remembered between launches on **both System 6 and 7** ★
+- **Find & Replace** and **Word Count** — from the Edit menu (⌘F / ⌘G) ★
+- **Clean imports** — opening a file written on a modern machine folds its UTF-8 smart quotes, dashes and line endings to Mac equivalents ★
+- **`@today` / `@time`** — type either and it expands to the current date/time ★
+- Cut/Copy/Paste with Markdown preserved, 15 levels of Undo/Redo, and Home/End/Page-key scrolling
+- A well-behaved classic app — Apple-menu About and desk accessories, MultiFinder-friendly, preferences in the System Folder
 
 ★ = new in this fork.
 
@@ -28,7 +32,7 @@ Beyond the features marked above, this is a near-total engineering rework under 
 
 - **A pure, testable core.** The Markdown strip / emit / detect / paginate logic lives in `mdcore` — Toolbox-free C, run under a host unit-test harness and gated by **CI** (host tests, `cppcheck`, and a real 68k build on every push).
 - **Correctness & robustness.** Hardened Memory Manager usage, a guarded 32K TextEdit limit that stops silent save failures, and reclaimed link IDs so long sessions don't exhaust the table.
-- **Runs on System 6, not just 7.** System 7-only Toolbox traps are gated behind a runtime version check, so ArtfulType works on original 68000 hardware like the Mac SE. (Zoom persistence is one of those System 7 calls, so it's the one feature that sits out on System 6.)
+- **Runs on System 6, not just 7.** System 7-only Toolbox traps are gated behind a runtime version check, so ArtfulType works on original 68000 hardware like the Mac SE — including **preferences persistence**, which locates the System Folder via the `BootDrive` low-memory global on System 6 (the way Inside Macintosh prescribes) rather than the System-7-only `FindFolder`.
 - **Ported to Apple's MPW/Universal interfaces** — the real Apple headers, not the open-source multiversal ones.
 - **Bootable disk images built on Linux — no Mac.** Volumes are formatted and *blessed* entirely in software: an 800K floppy (raw + DiskCopy 4.2), a 20 MB volume, and a BlueSCSI/PiSCSI `.hda`. A tag-triggered workflow builds and publishes them all.
 - **[floppy-writer](tools/floppy-writer/)** — a tiny companion app that writes a bootable ArtfulType floppy from a bare Mac (e.g. a Mac SE with only a System), so hardware with no other tooling can make its own boot disk.

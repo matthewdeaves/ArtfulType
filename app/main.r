@@ -172,6 +172,63 @@ resource 'DLOG' (136) {
     noAutoCenter
 };
 
+/* Preferences: startup defaults for new documents. Four pop-up menus, drawn as
+   userItems and driven by PopUpMenuSelect (System-6-safe -- the pop-up control
+   CDEF is System 7 only). See DoPreferences in zoom.c. */
+resource 'DITL' (137) {
+    {
+        {158, 215, 178, 285}, Button { enabled, "OK" },
+        {158, 130, 178, 200}, Button { enabled, "Cancel" },
+        {12, 20, 30, 285},   StaticText { disabled, "Set the defaults for new documents:" },
+        {46, 20, 64, 105},   StaticText { disabled, "Open in:" },
+        {44, 110, 64, 285},  UserItem { enabled },
+        {74, 20, 92, 105},   StaticText { disabled, "View:" },
+        {72, 110, 92, 285},  UserItem { enabled },
+        {102, 20, 120, 105}, StaticText { disabled, "Font:" },
+        {100, 110, 120, 285},UserItem { enabled },
+        {130, 20, 148, 105}, StaticText { disabled, "Zoom:" },
+        {128, 110, 148, 285},UserItem { enabled }
+    }
+};
+
+resource 'DLOG' (137) {
+    {70, 90, 260, 390},
+    dBoxProc,
+    invisible,
+    noGoAway,
+    0,
+    137,
+    "",
+    noAutoCenter
+};
+
+/* Find & Replace (ADR 0003). One modal dialog: Find selects the first match
+   from the caret; Replace All rewrites every match in the active view. Both use
+   the pure MdFind scan -- no System 7 traps. See find.c. */
+resource 'DITL' (138) {
+    {
+        {115, 245, 135, 305}, Button { enabled, "Find" },
+        {115, 20, 135, 90},   Button { enabled, "Cancel" },
+        {115, 120, 135, 235}, Button { enabled, "Replace All" },
+        {15, 15, 33, 90},     StaticText { disabled, "Find:" },
+        {13, 95, 33, 300},    EditText { enabled, "" },
+        {48, 15, 66, 100},    StaticText { disabled, "Replace with:" },
+        {46, 105, 66, 300},   EditText { enabled, "" },
+        {82, 95, 100, 260},   CheckBox { enabled, "Case sensitive" }
+    }
+};
+
+resource 'DLOG' (138) {
+    {80, 80, 230, 400},
+    dBoxProc,
+    invisible,
+    noGoAway,
+    0,
+    138,
+    "",
+    noAutoCenter
+};
+
 resource 'ICN#' (128) {
     {
         $"00000000000000000000000000000000"
@@ -251,5 +308,5 @@ resource 'BNDL' (128) {
    the compact-Mac targets. Conventionally the human-readable version string. */
 type 'ArtT' as 'STR ';
 resource 'ArtT' (0, purgeable) {
-    "ArtfulType 0.2.0-alpha"
+    "ArtfulType 0.4.0-alpha"
 };
