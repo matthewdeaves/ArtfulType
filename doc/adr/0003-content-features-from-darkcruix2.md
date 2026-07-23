@@ -166,7 +166,34 @@ Markdown mode. The read-modify-write range setters and `CompactLinkTable` were
 hardened to break runs on **all three** colour channels so writing one never
 clobbers another.
 
-**Still to do (a follow-on unit of work each):** blockquote, fenced code block,
-then bullet/numbered/nested/checkbox lists — each as pure `mdcore` + host tests +
-adapter, validated in the emulator before the next. (`==highlight==` and the
-horizontal rule are done.) Tracked in [plan 0002](../plans/0002-content-features.md).
+**Block-level tier completed — 2026-07-23 (cycle 3).** The remaining line-level
+blocks all shipped, each via the sanctioned "detect by content, render by overdraw,
+keep the marker literal" pattern the horizontal rule established — so, like the rule,
+every one is round-trip-safe *by construction* (the Writer buffer text stays equal to
+the canonical text; only the drawing changes, no colour channel spent):
+
+- **Blockquote** (`> `, nestable): pure `MdBlockquoteDepth` (host-tested) +
+  `DrawBlockquoteRuns`, which strokes one margin bar per nesting level beside the
+  quoted paragraph (bars tracked across wrapped continuation lines).
+- **Fenced code block** (```` ``` ````/`~~~`): pure `MdIsCodeFence` (host-tested) +
+  `DrawCodeBlockRuns`, a light-gray `patOr` stipple across the fence lines and
+  everything between them (fence parity tracked across the whole buffer so a line
+  mid-block shades correctly).
+- **Lists** (bullet/numbered/nested/checkbox): pure `MdParseListItem` (host-tested)
+  + `DrawListRuns`, which overpaints a `-`/`*`/`+` bullet with a real `•` glyph and a
+  `- [ ]`/`- [x]` task marker with a drawn (ticked) box; numbered `1. ` stays legibly
+  literal; nesting shows through the literal leading-space indent the text carries.
+
+All six Writer overpaints (these three, plus strike, highlight, and the rule) now run
+through a single `DrawWriterOverlays(te, revealActive)` entry point shared by the
+update, keystroke, scroll, and print paths. **Issue #9 (strike line rendered white)
+is fixed** in the same cycle: the strike line is now stroked exactly the way the rule
+is (`ForeColor(blackColor)` + `LineTo`), the one primitive confirmed to render black
+on both emulators, replacing the `PaintRect`/`PenMode(patCopy)` fill that came out
+white when unselected.
+
+With this, every feature in [plan 0002](../plans/0002-content-features.md) is
+implemented. The one deliberately-open item is a *rendering* compromise, not a gap:
+list-item text is not re-indented under its marker (classic styled TextEdit has no
+paragraph indent), and blockquote/code text is not restyled — the markers stay
+visible and the decoration is additive, which is what keeps the round-trip lossless.

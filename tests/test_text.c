@@ -106,11 +106,107 @@ static void test_hrule(void)
     CHECK_EQ(MdIsHorizontalRule("- item", 6), 0, "list item, not a rule");
 }
 
+static void test_blockquote(void)
+{
+    printf("test_text (MdBlockquoteDepth):\n");
+
+    CHECK_EQ(MdBlockquoteDepth("> quote", 7), 1, "single quote");
+    CHECK_EQ(MdBlockquoteDepth(">quote", 6), 1, "no space after marker");
+    CHECK_EQ(MdBlockquoteDepth("> > nested", 10), 2, "nested with spaces");
+    CHECK_EQ(MdBlockquoteDepth(">> nested", 9), 2, "nested compact");
+    CHECK_EQ(MdBlockquoteDepth("  > indented", 12), 1, "two leading spaces");
+    CHECK_EQ(MdBlockquoteDepth(">", 1), 1, "bare marker");
+
+    CHECK_EQ(MdBlockquoteDepth("quote", 5), 0, "plain text");
+    CHECK_EQ(MdBlockquoteDepth("", 0), 0, "empty line");
+    CHECK_EQ(MdBlockquoteDepth("    > code-indented", 19), 0, "four spaces is code, not quote");
+    CHECK_EQ(MdBlockquoteDepth("a > b", 5), 0, "marker not at line start");
+}
+
+static void test_codefence(void)
+{
+    printf("test_text (MdIsCodeFence):\n");
+
+    CHECK_EQ(MdIsCodeFence("```", 3), 1, "three backticks");
+    CHECK_EQ(MdIsCodeFence("~~~", 3), 1, "three tildes");
+    CHECK_EQ(MdIsCodeFence("```c", 4), 1, "backticks with info string");
+    CHECK_EQ(MdIsCodeFence("`````", 5), 1, "five backticks");
+    CHECK_EQ(MdIsCodeFence("  ```", 5), 1, "two leading spaces");
+
+    CHECK_EQ(MdIsCodeFence("``", 2), 0, "only two backticks");
+    CHECK_EQ(MdIsCodeFence("```a`b", 6), 0, "backtick in info string");
+    CHECK_EQ(MdIsCodeFence("", 0), 0, "empty line");
+    CHECK_EQ(MdIsCodeFence("code", 4), 0, "plain text");
+    CHECK_EQ(MdIsCodeFence("    ```", 7), 0, "four spaces disqualifies");
+}
+
+static void test_listitem(void)
+{
+    MdListInfo info;
+
+    printf("test_text (MdParseListItem):\n");
+
+    info = MdParseListItem("- item", 6);
+    CHECK_EQ(info.isList, 1, "dash bullet is a list");
+    CHECK_EQ(info.indent, 0, "dash bullet indent");
+    CHECK_EQ(info.markerChars, 2, "dash bullet marker len");
+    CHECK_EQ(info.ordered, 0, "dash bullet not ordered");
+    CHECK_EQ(info.checkbox, 0, "dash bullet no checkbox");
+
+    info = MdParseListItem("* item", 6);
+    CHECK_EQ(info.isList, 1, "star bullet is a list");
+
+    info = MdParseListItem("+ item", 6);
+    CHECK_EQ(info.isList, 1, "plus bullet is a list");
+
+    info = MdParseListItem("  - nested", 10);
+    CHECK_EQ(info.isList, 1, "nested bullet is a list");
+    CHECK_EQ(info.indent, 2, "nested bullet indent");
+    CHECK_EQ(info.markerChars, 2, "nested bullet marker len");
+
+    info = MdParseListItem("1. first", 8);
+    CHECK_EQ(info.isList, 1, "numbered is a list");
+    CHECK_EQ(info.ordered, 1, "numbered is ordered");
+    CHECK_EQ(info.markerChars, 3, "numbered marker len");
+
+    info = MdParseListItem("42) item", 8);
+    CHECK_EQ(info.isList, 1, "paren-numbered is a list");
+    CHECK_EQ(info.ordered, 1, "paren-numbered is ordered");
+    CHECK_EQ(info.markerChars, 4, "two-digit paren marker len");
+
+    info = MdParseListItem("- [ ] task", 10);
+    CHECK_EQ(info.isList, 1, "unchecked task is a list");
+    CHECK_EQ(info.checkbox, 1, "unchecked task has checkbox");
+    CHECK_EQ(info.checked, 0, "unchecked task not checked");
+    CHECK_EQ(info.markerChars, 6, "unchecked task marker len");
+
+    info = MdParseListItem("- [x] done", 10);
+    CHECK_EQ(info.isList, 1, "checked task is a list");
+    CHECK_EQ(info.checkbox, 1, "checked task has checkbox");
+    CHECK_EQ(info.checked, 1, "checked task is checked");
+
+    info = MdParseListItem("- [X] done", 10);
+    CHECK_EQ(info.checked, 1, "capital X counts as checked");
+
+    /* Non-lists */
+    info = MdParseListItem("-nospace", 8);
+    CHECK_EQ(info.isList, 0, "dash without space is not a list");
+    info = MdParseListItem("**bold**", 8);
+    CHECK_EQ(info.isList, 0, "bold marker is not a list");
+    info = MdParseListItem("plain", 5);
+    CHECK_EQ(info.isList, 0, "plain text is not a list");
+    info = MdParseListItem("1.no space", 10);
+    CHECK_EQ(info.isList, 0, "numbered without space is not a list");
+}
+
 int main(void)
 {
     test_normalize();
     test_find();
     test_wordcount();
     test_hrule();
+    test_blockquote();
+    test_codefence();
+    test_listitem();
     return TEST_RESULT();
 }

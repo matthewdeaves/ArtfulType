@@ -980,6 +980,121 @@ int MdIsHorizontalRule(const char *line, long len)
     return count >= 3 ? 1 : 0;
 }
 
+/* Blockquote nesting depth: leading '>' markers, each optionally followed by a
+   space, with up to three leading spaces allowed before each. 0 == not a quote. */
+int MdBlockquoteDepth(const char *line, long len)
+{
+    long i = 0;
+    int depth = 0;
+
+    for (;;) {
+        int spaces = 0;
+        while (i < len && line[i] == ' ' && spaces < 3) {
+            i++;
+            spaces++;
+        }
+        if (i < len && line[i] == '>') {
+            depth++;
+            i++;
+            if (i < len && line[i] == ' ')
+                i++;                  /* optional single space after '>' */
+        } else {
+            break;
+        }
+    }
+    return depth;
+}
+
+/* Fenced-code delimiter: 3+ of a single '`' or '~', up to three leading spaces,
+   and (for a backtick fence) no '`' in the trailing info string. 1/0. */
+int MdIsCodeFence(const char *line, long len)
+{
+    long i = 0;
+    int spaces = 0, count = 0;
+    char marker;
+
+    while (i < len && line[i] == ' ' && spaces < 3) {
+        i++;
+        spaces++;
+    }
+    if (i >= len || (line[i] != '`' && line[i] != '~'))
+        return 0;
+    marker = line[i];
+    while (i < len && line[i] == marker) {
+        count++;
+        i++;
+    }
+    if (count < 3)
+        return 0;
+    if (marker == '`') {
+        /* A backtick info string may not itself contain a backtick (CommonMark),
+           so "```code`inline" is not a fence -- it is a line with inline code. */
+        while (i < len) {
+            if (line[i] == '`')
+                return 0;
+            i++;
+        }
+    }
+    return 1;
+}
+
+/* Parses a leading list marker (bullet '-'/'*'/'+', numbered "N."/"N)", or a
+   GitHub task checkbox) off line[0..len). See mdcore.h for the field contract. */
+MdListInfo MdParseListItem(const char *line, long len)
+{
+    MdListInfo info;
+    long i = 0;
+    int indent = 0;
+
+    info.isList = 0;
+    info.indent = 0;
+    info.markerChars = 0;
+    info.ordered = 0;
+    info.checkbox = 0;
+    info.checked = 0;
+
+    while (i < len && (line[i] == ' ' || line[i] == '\t')) {
+        i++;
+        indent++;
+    }
+
+    if (i < len && (line[i] == '-' || line[i] == '*' || line[i] == '+')) {
+        /* A bullet needs a following space -- otherwise "**bold**" or "-x" at
+           line start would read as a list. */
+        if (i + 1 < len && line[i + 1] == ' ')
+            i += 2;
+        else
+            return info;
+    } else if (i < len && line[i] >= '0' && line[i] <= '9') {
+        long d = i;
+        while (d < len && line[d] >= '0' && line[d] <= '9')
+            d++;
+        if (d < len && (line[d] == '.' || line[d] == ')') &&
+            d + 1 < len && line[d + 1] == ' ') {
+            info.ordered = 1;
+            i = d + 2;
+        } else {
+            return info;
+        }
+    } else {
+        return info;
+    }
+
+    /* Optional task-list checkbox immediately after a bullet: "[ ] "/"[x] ". */
+    if (!info.ordered && i + 3 < len && line[i] == '[' &&
+        (line[i + 1] == ' ' || line[i + 1] == 'x' || line[i + 1] == 'X') &&
+        line[i + 2] == ']' && line[i + 3] == ' ') {
+        info.checkbox = 1;
+        info.checked = (line[i + 1] == 'x' || line[i + 1] == 'X') ? 1 : 0;
+        i += 4;
+    }
+
+    info.isList = 1;
+    info.indent = indent;
+    info.markerChars = (int) (i - indent);
+    return info;
+}
+
 /* Counts whitespace-separated words in buf[0..len). Pure. */
 long MdWordCount(const char *buf, long len)
 {

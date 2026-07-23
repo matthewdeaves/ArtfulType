@@ -293,15 +293,11 @@ static void DrawPage(TEHandle te, short pg)
     ClipRect(&rPage);
 
     TEUpdate(&rPage, te);
-    /* Highlight and strikethrough aren't TextEdit faces; overpaint them exactly
-       like the on-screen path (each a no-op when the buffer carries none), the
-       highlight band first so a struck line lands on top of it. Highlight prints
-       fine (patOr gray); strike shares its known issue #9 -- the overpaint colour
-       can come out wrong on some devices -- but the geometry is correct, so it
-       prints when that is fixed and, worst case, is merely invisible now. */
-    DrawHighlightRuns(te);
-    DrawStruckRuns(te);
-    DrawHrRuns(te, false);   /* print every rule (no active-line reveal) */
+    /* The block and non-face features aren't TextEdit faces; overpaint them
+       exactly like the on-screen path (see DrawWriterOverlays -- each pass is a
+       no-op when the buffer carries none). revealActive is false so every rule
+       and list marker prints (there is no caret to reveal on paper). */
+    DrawWriterOverlays(te, false);
 
     SetClip(saveClip);
     DisposeRgn(saveClip);

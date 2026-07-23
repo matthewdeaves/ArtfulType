@@ -26,20 +26,17 @@ static void SyncScrollbarToOffset(void)
 }
 
 /*
-    TEScroll repaints the scrolled text immediately but not the hand-drawn
-    strike-through line (see DrawStruckRuns), and unlike a content click it
-    posts no update event -- so every scroll path must repaint the overpaint
-    itself. A no-op outside Writer mode (gTE never carries the strike flag) and
-    a fast early-out when the document has no strike at all. Mirrors what the
-    keystroke path in main.c already does after its own ScrollCaretIntoView.
+    TEScroll repaints the scrolled text immediately but not the hand-drawn Writer
+    overlays (strike lines, highlight/code-block backgrounds, blockquote bars, list
+    markers, rules -- see DrawWriterOverlays), and unlike a content click it posts
+    no update event, so every scroll path must repaint them itself. A no-op outside
+    Writer mode (gTE carries none of these). Mirrors what the keystroke path in
+    main.c already does after its own ScrollCaretIntoView.
 */
 static void RepaintStrikeAfterScroll(void)
 {
-    if (gHideMarkdown) {
-        DrawHighlightRuns(gActiveTE);
-        DrawStruckRuns(gActiveTE);
-        DrawHrRuns(gActiveTE, true);
-    }
+    if (gHideMarkdown)
+        DrawWriterOverlays(gActiveTE, true);
 }
 
 /*
