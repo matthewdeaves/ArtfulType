@@ -86,10 +86,31 @@ static void test_wordcount(void)
     CHECK_EQ(MdWordCount("a\rb\nc\td", 7), 4, "mixed whitespace");
 }
 
+static void test_hrule(void)
+{
+    printf("test_text (MdIsHorizontalRule):\n");
+
+    CHECK_EQ(MdIsHorizontalRule("---", 3), 1, "three dashes");
+    CHECK_EQ(MdIsHorizontalRule("***", 3), 1, "three stars");
+    CHECK_EQ(MdIsHorizontalRule("___", 3), 1, "three underscores");
+    CHECK_EQ(MdIsHorizontalRule("----------", 10), 1, "many dashes");
+    CHECK_EQ(MdIsHorizontalRule("- - -", 5), 1, "spaced dashes");
+    CHECK_EQ(MdIsHorizontalRule("  ***  ", 7), 1, "padded stars");
+
+    CHECK_EQ(MdIsHorizontalRule("--", 2), 0, "only two dashes");
+    CHECK_EQ(MdIsHorizontalRule("", 0), 0, "empty line");
+    CHECK_EQ(MdIsHorizontalRule("   ", 3), 0, "spaces only");
+    CHECK_EQ(MdIsHorizontalRule("---x", 4), 0, "trailing text");
+    CHECK_EQ(MdIsHorizontalRule("abc", 3), 0, "plain text");
+    CHECK_EQ(MdIsHorizontalRule("-*-", 3), 0, "mixed markers");
+    CHECK_EQ(MdIsHorizontalRule("- item", 6), 0, "list item, not a rule");
+}
+
 int main(void)
 {
     test_normalize();
     test_find();
     test_wordcount();
+    test_hrule();
     return TEST_RESULT();
 }

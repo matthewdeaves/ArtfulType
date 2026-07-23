@@ -291,4 +291,13 @@ long MdFind(const char *hay, long hayLen, const char *needle, long needleLen,
             long from, int caseSensitive);
 long MdWordCount(const char *buf, long len);
 
+/*
+    MdIsHorizontalRule reports whether line[0..len) is a Markdown thematic break:
+    three or more of a SINGLE marker character ('-', '*' or '_'), with spaces/
+    tabs permitted anywhere, and no other character present. Used by the Writer
+    view to render a bare "---"/"***"/"___" line as a drawn rule. The marker text
+    itself is never altered, so the Markdown source round-trips untouched. Pure.
+*/
+int MdIsHorizontalRule(const char *line, long len);
+
 #endif /* MDCORE_H */

@@ -301,6 +301,7 @@ static void DrawPage(TEHandle te, short pg)
        prints when that is fixed and, worst case, is merely invisible now. */
     DrawHighlightRuns(te);
     DrawStruckRuns(te);
+    DrawHrRuns(te, false);   /* print every rule (no active-line reveal) */
 
     SetClip(saveClip);
     DisposeRgn(saveClip);

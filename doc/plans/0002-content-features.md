@@ -110,8 +110,11 @@ availability (bullet `$A5` yes; em-dash `$D1` yes; ballot box **no** → checkbo
 compromise). Write the chosen model into ADR 0003 or a short spike note.
 
 ### 3b. Implement, smallest-first (each: pure `mdcore` + host tests, then adapter)
-1. **Horizontal rule** (`---`/`***`/`___` on their own line) → a filled rule-char
-   run. Smallest.
+1. **Horizontal rule** (`---`/`***`/`___` on their own line) — ✅ **DONE
+   (2026-07-23).** Detected by content (pure `MdIsHorizontalRule`, host-tested)
+   and drawn by `DrawHrRuns` overdraw — no text mutation, no style channel, so
+   the round-trip is safe by construction. Reveal-on-active-line keeps the
+   markers editable; prints via the print path too.
 2. **Highlight `==text==`** — ✅ **DONE (2026-07-23).** `MD_KIND_HIGHLIGHT` +
    the `tsColor.blue` flag in `MdStyleFields`/`MdRunToFields`; adapter
    `DrawHighlightRuns` paints a light-gray `patOr` stipple mirroring

@@ -38,6 +38,7 @@ static void RepaintStrikeAfterScroll(void)
     if (gHideMarkdown) {
         DrawHighlightRuns(gActiveTE);
         DrawStruckRuns(gActiveTE);
+        DrawHrRuns(gActiveTE, true);
     }
 }
 

@@ -339,6 +339,7 @@ static void DoUpdate(WindowPtr w)
     if (gHideMarkdown) {
         DrawHighlightRuns(gActiveTE);
         DrawStruckRuns(gActiveTE);
+        DrawHrRuns(gActiveTE, true);
     }
     DrawControls(w);
     /* In windowed mode paint the grow box. Clip to the 15x15 corner so
@@ -666,6 +667,7 @@ static void EventLoop(void)
                         if (gHideMarkdown) {
                             DrawHighlightRuns(gActiveTE);
                             DrawStruckRuns(gActiveTE);
+                            DrawHrRuns(gActiveTE, true);
                         }
                     }
                     break;
