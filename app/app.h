@@ -330,6 +330,7 @@ void DetectInlineMarkdown(char justTyped);
 void DoStyleCommand(short menuItem);
 void DrawStruckRuns(TEHandle te);
 void DrawHighlightRuns(TEHandle te);
+void DrawHrRuns(TEHandle te, Boolean revealActive);
 void ClearSelectionStyleHidden(void);
 void ClearMarkdownInSelection(void);
 

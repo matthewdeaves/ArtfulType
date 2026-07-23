@@ -1883,3 +1883,107 @@ void DrawHighlightRuns(TEHandle te)
     SetClip(saveClip);
     DisposeRgn(saveClip);
 }
+
+/*
+    Renders a Markdown thematic break -- a paragraph of only dash, star or
+    underscore markers (see the pure MdIsHorizontalRule) -- as a drawn horizontal
+    rule in the Writer view, which TextEdit can't do. For each such visible
+    paragraph it erases the marker
+    text and strokes a centered line across the text column. The buffer is never
+    touched, so the canonical Markdown still holds "---" and the round-trip is
+    lossless -- only the drawing changes (the same overpaint idea as
+    DrawStruckRuns/DrawHighlightRuns). When revealActive is true the paragraph the
+    caret sits in is left as literal markers so it can be edited; printing passes
+    false so every rule prints. Writer-mode only (gTE never shows rules).
+*/
+void DrawHrRuns(TEHandle te, Boolean revealActive)
+{
+    Rect view;
+    short nLines, L;
+    long teLen, caret;
+    Handle hText;
+    PenState savePen;
+    short saveFont, saveFace, saveSize;
+    RgnHandle saveClip;
+    Rect clipR;
+
+    view = (**te).viewRect;
+    nLines = (**te).nLines;
+    teLen = (**te).teLength;
+    hText = (**te).hText;
+    caret = (**te).selStart;
+    if (teLen == 0 || nLines == 0 || hText == NULL)
+        return;
+
+    saveClip = NewRgn();
+    if (saveClip == NULL)
+        return;
+    GetClip(saveClip);
+    if (!SectRect(&view, &(**saveClip).rgnBBox, &clipR))
+        clipR = view;
+    ClipRect(&clipR);
+
+    GetPenState(&savePen);
+    saveFont = qd.thePort->txFont;
+    saveFace = qd.thePort->txFace;
+    saveSize = qd.thePort->txSize;
+    PenNormal();
+
+    HLock(hText);
+    for (L = 0; L < nLines; L++) {
+        long ls = (**te).lineStarts[L];
+        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
+        long contentLen;
+        Point base;
+        TextStyle st;
+        short lh, fa;
+        FontInfo fi;
+        Rect band;
+        short midY;
+
+        /* Must begin a paragraph (so a wrapped continuation can't match). */
+        if (ls != 0 && (*hText)[ls - 1] != '\r')
+            continue;
+        contentLen = le - ls;
+        if (contentLen > 0 && (*hText)[le - 1] == '\r')
+            contentLen--;                 /* drop the paragraph's trailing CR */
+        if (!MdIsHorizontalRule((const char *) (*hText) + ls, contentLen))
+            continue;
+        /* Leave the markers visible on the line being edited. */
+        if (revealActive && caret >= ls && caret <= ls + contentLen)
+            continue;
+
+        base = TEGetPoint((short) ls, te);
+        if (base.v < view.top - MAX_LINE_HEIGHT)
+            continue;                     /* wholly above the view */
+        if (base.v - MAX_LINE_HEIGHT > view.bottom)
+            break;                        /* this and every later line below */
+
+        TEGetStyle((short) ls, &st, &lh, &fa, te);
+        TextFont(st.tsFont);
+        TextFace(st.tsFace);
+        TextSize(st.tsSize);
+        GetFontInfo(&fi);
+
+        /* Erase the marker glyphs, then stroke a rule down the line's middle
+           across the text column (destRect is the wrap column). */
+        band.left = (**te).destRect.left;
+        band.right = (**te).destRect.right;
+        band.bottom = base.v;
+        band.top = (short) (base.v - fi.ascent - fi.descent);
+        EraseRect(&band);
+        midY = (short) ((band.top + band.bottom) / 2);
+        PenSize(1, 1);
+        ForeColor(blackColor);
+        MoveTo((short) (band.left + 8), midY);
+        LineTo((short) (band.right - 8), midY);
+    }
+    HUnlock(hText);
+
+    TextFont(saveFont);
+    TextFace(saveFace);
+    TextSize(saveSize);
+    SetPenState(&savePen);
+    SetClip(saveClip);
+    DisposeRgn(saveClip);
+}

@@ -956,6 +956,30 @@ long MdFind(const char *hay, long hayLen, const char *needle, long needleLen,
     return -1;
 }
 
+/* Reports whether line[0..len) is a Markdown thematic break: 3+ of one marker
+   char ('-', '*' or '_'), spaces/tabs allowed anywhere, nothing else. Pure. */
+int MdIsHorizontalRule(const char *line, long len)
+{
+    char marker = 0;
+    long i, count = 0;
+
+    for (i = 0; i < len; i++) {
+        char c = line[i];
+        if (c == ' ' || c == '\t')
+            continue;
+        if (c == '-' || c == '*' || c == '_') {
+            if (marker == 0)
+                marker = c;
+            else if (c != marker)
+                return 0;          /* markers must all match */
+            count++;
+        } else {
+            return 0;              /* any other character disqualifies */
+        }
+    }
+    return count >= 3 ? 1 : 0;
+}
+
 /* Counts whitespace-separated words in buf[0..len). Pure. */
 long MdWordCount(const char *buf, long len)
 {

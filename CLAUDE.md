@@ -68,6 +68,14 @@ run per character range, and `ApplySpanStyles` applies a single combined
 `TextStyle` per run — that one combined write is what lets bold+strike+link
 coexist without a later span clobbering an earlier face.
 
+A **horizontal rule** (a paragraph of only `---`/`***`/`___`) is the exception
+to the style-run model: it carries no style flag at all. `DrawHrRuns` detects
+such lines by content (pure `MdIsHorizontalRule`) at draw time and overpaints a
+drawn rule — the marker text is never modified, so the Markdown round-trips
+untouched and no colour channel is spent. The caret's own line is left as literal
+markers so it stays editable. This is the model for future *line-level* block
+features now that the three colour channels are full.
+
 The pure engine `mdcore` (`app/mdcore.{c,h}`) does strip / emit / span→run
 flatten / live-detect on plain buffers; `markdown.c` is the thin Mac adapter
 that locks handles, calls mdcore, and maps runs onto real `TextStyle` runs.

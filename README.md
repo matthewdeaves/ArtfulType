@@ -13,6 +13,7 @@ Video overview: [Artful Type demo](https://youtu.be/HEheu_r9UGw)
 One document, two views toggled from the View menu — **Writer** (Markdown rendered live as styled text) and **Markdown** (the raw source). Saved files are always plain `.md`, editable anywhere.
 
 - **Live styling** — bold, italic, `code`, headings, links, **strikethrough**, and **`==highlight==`**, as you type or from the Style menu ★
+- **Horizontal rules** — a line of `---`, `***` or `___` renders as a drawn rule in Writer mode ★
 - **Styles nest and combine** — a struck bold word, a bold link, a highlighted phrase, `***bold italic***` — round-tripping losslessly between Writer and Markdown ★
 - **Print** — Page Setup and Print through the classic Printing Manager, on System 6 and System 7 ★
 - **Links** — type `[text](url)` inline, or select text → Style → Link

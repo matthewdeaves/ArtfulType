@@ -138,11 +138,15 @@ line is whether a feature **hides line-structure text** in the Writer view:
   indentation synthesised). Each changes the Writer text vs. canonical and must
   re-insert the hidden structure on emit — the delicate part, best validated one
   block type at a time on real System 6 hardware. **Deferred, still tracked.**
-- **Horizontal rule** turned out to sit *between*: rendering it cleanly wants the
-  `---` glyphs hidden, but the only hide mechanism (a white `tsColor`) collides
-  with the red/green/blue encoding channels. Left with the line-hiding group
-  until a non-colliding rule-drawing approach is chosen (adapter overdraw of a
-  line across a specially-flagged run is the likely route).
+- **Horizontal rule** turned out to sit *between*, and was then **solved and
+  shipped (2026-07-23):** rather than hide the `---` glyphs with a colliding
+  colour, `DrawHrRuns` detects a rule paragraph by *content* (the pure
+  `MdIsHorizontalRule`) at draw time and overpaints — erasing the markers and
+  stroking a rule across the column. No text mutation and no style channel, so
+  the round-trip is safe by construction; the caret's line is left as literal
+  markers so it stays editable. This "detect line-level structure by content,
+  render by overdraw" pattern is the template for the remaining line-level
+  blocks now that the three colour channels are full.
 
 **Channel map locked (candidate B of the 2026-07-23 architecture review):** the
 three repurposed `tsColor` channels are now fully allocated —
@@ -162,7 +166,7 @@ Markdown mode. The read-modify-write range setters and `CompactLinkTable` were
 hardened to break runs on **all three** colour channels so writing one never
 clobbers another.
 
-**Still to do (a follow-on unit of work each, smallest first):** blockquote,
-fenced code block, horizontal rule, then bullet/numbered/nested/checkbox lists —
-each as pure `mdcore` + host tests + adapter, validated in the emulator before
-the next. Tracked in [plan 0002](../plans/0002-content-features.md).
+**Still to do (a follow-on unit of work each):** blockquote, fenced code block,
+then bullet/numbered/nested/checkbox lists — each as pure `mdcore` + host tests +
+adapter, validated in the emulator before the next. (`==highlight==` and the
+horizontal rule are done.) Tracked in [plan 0002](../plans/0002-content-features.md).
