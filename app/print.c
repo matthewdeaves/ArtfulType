@@ -293,11 +293,13 @@ static void DrawPage(TEHandle te, short pg)
     ClipRect(&rPage);
 
     TEUpdate(&rPage, te);
-    /* Strikethrough is not a TextEdit face; overpaint struck runs exactly like
-       the on-screen path (a no-op when the buffer carries no strike). This
-       shares DrawStruckRuns' known issue #9 -- the overpaint colour can come
-       out wrong on some devices -- but the geometry is correct, so strike
+    /* Highlight and strikethrough aren't TextEdit faces; overpaint them exactly
+       like the on-screen path (each a no-op when the buffer carries none), the
+       highlight band first so a struck line lands on top of it. Highlight prints
+       fine (patOr gray); strike shares its known issue #9 -- the overpaint colour
+       can come out wrong on some devices -- but the geometry is correct, so it
        prints when that is fixed and, worst case, is merely invisible now. */
+    DrawHighlightRuns(te);
     DrawStruckRuns(te);
 
     SetClip(saveClip);

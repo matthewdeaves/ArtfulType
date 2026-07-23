@@ -15,7 +15,7 @@ CFLAGS  = -std=c89 -Wall -Wextra -Wno-unused-function \
           -DAT_HOST_TEST -I. -I../app
 
 # Each test executable and the sources it exercises.
-BINS = test_smoke test_mdcore test_mddetect test_paginate
+BINS = test_smoke test_mdcore test_mddetect test_paginate test_text
 
 all: check
 
@@ -30,6 +30,9 @@ test_mddetect: test_mddetect.c ../app/mdcore.c ../app/mdcore.h test_util.h
 
 test_paginate: test_paginate.c ../app/mdcore.c ../app/mdcore.h test_util.h
 	$(CC) $(CFLAGS) -o $@ test_paginate.c ../app/mdcore.c
+
+test_text: test_text.c ../app/mdcore.c ../app/mdcore.h test_util.h
+	$(CC) $(CFLAGS) -o $@ test_text.c ../app/mdcore.c
 
 check: $(BINS)
 	@fail=0; \

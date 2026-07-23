@@ -105,6 +105,25 @@ static void test_strike_opening_completes(void)
                "strike: opening ~~ reaches a later closing ~~");
 }
 
+static void test_highlight_closing_completes(void)
+{
+    /* "==mark==" + the final '=': the just-typed == closes an opening == at
+       the line start. Delete both pairs, highlight the "mark" between them. */
+    MdInlineEdit e = det("==mark==", 8, '=');
+    check_plan(e, MD_KIND_HIGHLIGHT, 6, 8, 0, 2, 0, 4, 4, 1,
+               "highlight: closing == completes the pair");
+}
+
+static void test_highlight_opening_completes(void)
+{
+    /* "AB==CD==" + the '=' at index 3: the just-typed == (2..3) has no
+       opening behind it, so it becomes the OPENING for the closing == at
+       6..7 -- highlight the "CD" that lies between them. */
+    MdInlineEdit e = det("AB==CD==", 4, '=');
+    check_plan(e, MD_KIND_HIGHLIGHT, 6, 8, 2, 4, 2, 4, 2, 1,
+               "highlight: opening == reaches a later closing ==");
+}
+
 static void test_link_completes(void)
 {
     /* "[t](u)" + the closing ')': strip the "](u)" tail and the leading
@@ -202,6 +221,8 @@ int main(void)
     test_code_opening_completes();
     test_strike_closing_completes();
     test_strike_opening_completes();
+    test_highlight_closing_completes();
+    test_highlight_opening_completes();
     test_link_completes();
     test_link_longer_url();
     test_heading_levels();

@@ -97,6 +97,33 @@ static void test_strike(void)
     CHECK_EQ(g_nSpans, 0, "no span for a lone tilde");
 }
 
+static void test_highlight(void)
+{
+    long n = strip("==mark==", 0, 1);
+    CHECK_STR(g_out, n, "mark", "highlight delimiters stripped");
+    CHECK_EQ(g_nSpans, 1, "one highlight span");
+    CHECK_EQ(g_spans[0].kind, MD_KIND_HIGHLIGHT, "kind is highlight");
+    CHECK_EQ(g_spans[0].start, 0, "highlight span start");
+    CHECK_EQ(g_spans[0].end, 4, "highlight span covers 'mark'");
+
+    /* In context, and not confused by a single '='. */
+    n = strip("a ==x== b", 0, 1);
+    CHECK_STR(g_out, n, "a x b", "highlight in context stripped");
+    CHECK_EQ(g_nSpans, 1, "single highlight span in the middle");
+    CHECK_EQ(g_spans[0].start, 2, "highlight starts at 'x'");
+    CHECK_EQ(g_spans[0].end, 3, "highlight ends after 'x'");
+
+    /* A lone '==' with no partner on the line stays literal. */
+    n = strip("a == b", 0, 1);
+    CHECK_STR(g_out, n, "a == b", "unmatched == kept literal");
+    CHECK_EQ(g_nSpans, 0, "no span for an unmatched ==");
+
+    /* A single equals is never a delimiter. */
+    n = strip("1=2", 0, 1);
+    CHECK_STR(g_out, n, "1=2", "lone equals kept literal");
+    CHECK_EQ(g_nSpans, 0, "no span for a lone equals");
+}
+
 static void test_link(void)
 {
     long n = strip("see [text](http://x) end", 0, 1);
@@ -261,6 +288,8 @@ static void test_emit_roundtrip(void)
     roundtrip("[a](u1) and [b](u2)", "two links round-trip");
     roundtrip("~~struck~~", "strike round-trips");
     roundtrip("a ~~b~~ c", "strike in context round-trips");
+    roundtrip("==marked==", "highlight round-trips");
+    roundtrip("a ==b== c", "highlight in context round-trips");
     roundtrip("~~struck~~ and **bold** and *it*", "strike beside bold/italic round-trips");
 }
 
@@ -284,6 +313,9 @@ static void test_nested_roundtrip(void)
     roundtrip("~~***x***~~", "strike+bold+italic round-trips");
     roundtrip("[~~**x**~~](u)", "link+strike+bold round-trips");
     roundtrip("see [~~**t**~~](u) ok", "everything nested in context round-trips");
+    roundtrip("==**x**==", "highlight wrapping bold round-trips");
+    roundtrip("==~~x~~==", "highlight wrapping strike round-trips");
+    roundtrip("[==**x**==](u)", "link+highlight+bold round-trips");
 }
 
 /* Flatten a fully-uniform strip result to its single combined run and return
@@ -314,6 +346,14 @@ static void test_nested_strip_attributes(void)
 
     r = only_run("~~***x***~~", "triple collapses to one run");
     CHECK(r.bold && r.italic && r.strike, "~~***x***~~ is bold+italic+strike");
+
+    r = only_run("==**x**==", "highlight+bold collapses to one run");
+    CHECK(r.highlight && r.bold && !r.strike && !r.italic && !r.code && !r.link,
+          "==**x**== is bold AND highlight");
+
+    r = only_run("[==~~x~~==](u)", "link+highlight+strike collapses to one run");
+    CHECK(r.link && r.highlight && r.strike && r.linkID == 1,
+          "[==~~x~~==](u) is link AND highlight AND strike, id 1");
 }
 
 /* MdSpansToRuns in isolation: overlap ORs, disjoint spans split, equal
@@ -347,25 +387,27 @@ static void test_spans_to_runs(void)
     CHECK(rn[0].link && rn[0].linkID == 7, "link run carries its id");
 }
 
-/* The pure style-field codec: every one of the 32 attribute combinations must
-   survive MdRunToFields -> MdFieldsToRun unchanged, and the link (red) and
-   strike (green) channels must stay independent. This is the combined-write
-   invariant the Mac adapter (ApplySpanStyles/BuildStyleRuns) rides on -- the
-   exact class of the bug where a second style clobbered the first. */
+/* The pure style-field codec: every one of the 64 attribute combinations must
+   survive MdRunToFields -> MdFieldsToRun unchanged, and the link (red), strike
+   (green) and highlight (blue) channels must stay independent. This is the
+   combined-write invariant the Mac adapter (ApplySpanStyles/BuildStyleRuns)
+   rides on -- the exact class of the bug where a second style clobbered the
+   first. */
 static void test_style_fields_roundtrip(void)
 {
     int combo;
 
-    for (combo = 0; combo < 32; combo++) {
+    for (combo = 0; combo < 64; combo++) {
         MdRun in, out;
         MdStyleFields f;
 
         in.start = 11; in.end = 22;           /* codec must not touch these */
-        in.bold   = (combo & 1)  ? 1 : 0;
-        in.italic = (combo & 2)  ? 1 : 0;
-        in.code   = (combo & 4)  ? 1 : 0;
-        in.link   = (combo & 8)  ? 1 : 0;
-        in.strike = (combo & 16) ? 1 : 0;
+        in.bold      = (combo & 1)  ? 1 : 0;
+        in.italic    = (combo & 2)  ? 1 : 0;
+        in.code      = (combo & 4)  ? 1 : 0;
+        in.link      = (combo & 8)  ? 1 : 0;
+        in.strike    = (combo & 16) ? 1 : 0;
+        in.highlight = (combo & 32) ? 1 : 0;
         in.linkID = in.link ? 7 : 0;          /* a link always has a real id */
 
         f = MdRunToFields(&in);
@@ -378,6 +420,7 @@ static void test_style_fields_roundtrip(void)
         CHECK_EQ(out.code, in.code, "codec preserves code");
         CHECK_EQ(out.link, in.link, "codec preserves link");
         CHECK_EQ(out.strike, in.strike, "codec preserves strike");
+        CHECK_EQ(out.highlight, in.highlight, "codec preserves highlight");
         CHECK_EQ(out.linkID, in.linkID, "codec preserves link id");
     }
 }
@@ -418,14 +461,17 @@ static void test_style_fields_channels_independent(void)
     MdRun in;
     MdStyleFields f;
 
-    /* A struck link must keep BOTH channels: red carries the id, green the
-       strike, and the underline face bit rides along -- none clobbers another. */
+    /* A struck, highlighted link must keep ALL THREE channels: red carries the
+       id, green the strike, blue the highlight, and the underline face bit rides
+       along -- none clobbers another. */
     in.start = 0; in.end = 1;
     in.bold = 0; in.italic = 0; in.code = 0; in.link = 1; in.strike = 1;
+    in.highlight = 1;
     in.linkID = 42;
     f = MdRunToFields(&in);
     CHECK_EQ(f.linkID, 42, "link id lands in the red channel");
     CHECK_EQ(f.strike, 1, "strike lands in the green channel");
+    CHECK_EQ(f.highlight, 1, "highlight lands in the blue channel");
     CHECK(f.face & MD_FACE_UNDERLINE, "link sets the underline face bit");
 
     /* A non-link run must carry no id, even if some caller left junk around. */
@@ -497,7 +543,8 @@ static void test_emit_respects_outcap(void)
     for (i = 0; i < 6; i++) {
         runs[i].start = i; runs[i].end = i + 1;
         runs[i].bold = 1; runs[i].italic = 0; runs[i].code = 0;
-        runs[i].link = 0; runs[i].strike = 0; runs[i].linkID = 0;
+        runs[i].link = 0; runs[i].strike = 0; runs[i].highlight = 0;
+        runs[i].linkID = 0;
     }
     ret = MdEmitInline("abcdef", 6, runs, 6, (MdLinkTable *) 0, buf, 10);
 
@@ -516,7 +563,7 @@ static void test_emit_combined_attributes(void)
     /* A run that is bold AND italic: open **, then *, close *, then **. */
     runs[0].start = 0; runs[0].end = 2;
     runs[0].bold = 1; runs[0].italic = 1; runs[0].code = 0; runs[0].link = 0;
-    runs[0].strike = 0; runs[0].linkID = 0;
+    runs[0].strike = 0; runs[0].highlight = 0; runs[0].linkID = 0;
     n = MdEmitInline("hi", 2, runs, 1, (MdLinkTable *) 0, g_out2, sizeof g_out2);
     CHECK_STR(g_out2, n, "***hi***", "bold+italic nests as ***");
 
@@ -526,16 +573,23 @@ static void test_emit_combined_attributes(void)
     g_links.url[1][1] = 'u';
     runs[0].start = 0; runs[0].end = 1;
     runs[0].bold = 1; runs[0].italic = 0; runs[0].code = 0; runs[0].link = 1;
-    runs[0].strike = 0; runs[0].linkID = 1;
+    runs[0].strike = 0; runs[0].highlight = 0; runs[0].linkID = 1;
     n = MdEmitInline("x", 1, runs, 1, &g_links, g_out2, sizeof g_out2);
     CHECK_STR(g_out2, n, "[**x**](u)", "bold link wraps correctly");
 
     /* Strike + bold: strike is the outer of the two, so ~~ wraps **. */
     runs[0].start = 0; runs[0].end = 2;
     runs[0].bold = 1; runs[0].italic = 0; runs[0].code = 0; runs[0].link = 0;
-    runs[0].strike = 1; runs[0].linkID = 0;
+    runs[0].strike = 1; runs[0].highlight = 0; runs[0].linkID = 0;
     n = MdEmitInline("hi", 2, runs, 1, (MdLinkTable *) 0, g_out2, sizeof g_out2);
     CHECK_STR(g_out2, n, "~~**hi**~~", "strike wraps bold");
+
+    /* Highlight + bold: highlight is the outer of the two, so == wraps **. */
+    runs[0].start = 0; runs[0].end = 2;
+    runs[0].bold = 1; runs[0].italic = 0; runs[0].code = 0; runs[0].link = 0;
+    runs[0].strike = 0; runs[0].highlight = 1; runs[0].linkID = 0;
+    n = MdEmitInline("hi", 2, runs, 1, (MdLinkTable *) 0, g_out2, sizeof g_out2);
+    CHECK_STR(g_out2, n, "==**hi**==", "highlight wraps bold");
 }
 
 int main(void)
@@ -546,6 +600,7 @@ int main(void)
     test_italic_code();
     test_bold_beats_italic();
     test_strike();
+    test_highlight();
     test_link();
     test_link_without_table();
     test_heading();

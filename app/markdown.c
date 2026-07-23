@@ -14,16 +14,21 @@
     directly, and a handful of "reset to plain" sites zero all channels at once.
 */
 
-/* Times and Monaco are the only two fonts the Writer view uses, and a font's
-   number is fixed for the life of the app -- so resolve each name once and
-   cache it. GetFNum otherwise walks the font list on every call, and these run
-   on every style pass. (-1 == not yet resolved; both fonts have positive IDs.) */
-static short TimesFont(void)
+/* The body font is a user preference (gFontChoice); Monaco is fixed as the code
+   font. Both resolve to a font number that is stable until the preference
+   changes, and both style passes need them often -- so cache and only re-resolve
+   the body font when the choice actually changes (BodyFontNum validates the
+   choice, falling back to Times if the chosen font isn't installed). This keeps
+   the common style pass off GetFNum's font-list walk. */
+static short BodyFont(void)
 {
-    static short cached = -1;
-    if (cached < 0)
-        GetFNum("\pTimes", &cached);
-    return cached;
+    static short cachedChoice = -1;
+    static short cachedNum = 0;
+    if (cachedChoice != gFontChoice) {
+        cachedNum = BodyFontNum();
+        cachedChoice = gFontChoice;
+    }
+    return cachedNum;
 }
 
 static short MonacoFont(void)
@@ -115,7 +120,8 @@ static void SetStrikeRange(TEHandle te, long from, long to, short on)
 
             TEGetStyle((short) runEnd, &st2, &lh2, &fa2, te);
             if (GetStrikeFlag(&st2) != GetStrikeFlag(&st) ||
-                st2.tsColor.red != st.tsColor.red)
+                st2.tsColor.red != st.tsColor.red ||
+                st2.tsColor.blue != st.tsColor.blue)   /* keep highlight intact */
                 break;
             runEnd++;
         }
@@ -123,6 +129,71 @@ static void SetStrikeRange(TEHandle te, long from, long to, short on)
             SetStrikeFlag(&st, want);
             if (want)
                 gDocHasStrike = true;
+            TESetSelect((short) i, (short) runEnd, te);
+            TESetStyle(doColor, &st, false, te);
+        }
+        i = runEnd;
+    }
+}
+
+/*
+    Highlight (==mark==) has no native classic text face either, so a highlighted
+    run is flagged in its run's tsColor.blue (1 == highlighted) -- the third and
+    last of the repurposed colour channels (red = link ID, green = strike, blue =
+    highlight), all independent, so a highlighted struck link keeps all three.
+    TextEdit can't draw a background behind the text; DrawHighlightRuns paints a
+    light-gray stipple over it after TextEdit lays the text down (patOr, so the
+    black glyphs are untouched). Mirrors the strike channel helpers exactly.
+*/
+static short GetHighlightFlag(const TextStyle *ts)
+{
+    return ts->tsColor.blue ? 1 : 0;
+}
+
+static void SetHighlightFlag(TextStyle *ts, short on)
+{
+    ts->tsColor.blue = on ? 1 : 0;
+}
+
+/* Fast-path guard for DrawHighlightRuns, exactly like gDocHasStrike: cleared on
+   every BuildHiddenView and re-set iff the rebuilt view actually contains a
+   highlight, so the common highlight-free document skips the per-keystroke
+   sweep. */
+static Boolean gDocHasHighlight = false;
+
+/*
+    Sets (on != 0) or clears the highlight flag over te[from,to), preserving each
+    run's link ID (red) and strike flag (green). Because TESetStyle writes the
+    whole colour, the run walk breaks whenever ANY of the three channels changes,
+    so writing blue can never clobber a run's red or green. Mirrors SetStrikeRange.
+*/
+static void SetHighlightRange(TEHandle te, long from, long to, short on)
+{
+    long i = from;
+    short want = on ? 1 : 0;
+
+    while (i < to) {
+        TextStyle st;
+        short lh, fa;
+        long runEnd;
+
+        TEGetStyle((short) i, &st, &lh, &fa, te);
+        runEnd = i + 1;
+        while (runEnd < to) {
+            TextStyle st2;
+            short lh2, fa2;
+
+            TEGetStyle((short) runEnd, &st2, &lh2, &fa2, te);
+            if (GetHighlightFlag(&st2) != GetHighlightFlag(&st) ||
+                st2.tsColor.red != st.tsColor.red ||
+                st2.tsColor.green != st.tsColor.green)
+                break;
+            runEnd++;
+        }
+        if (GetHighlightFlag(&st) != want) {
+            SetHighlightFlag(&st, want);
+            if (want)
+                gDocHasHighlight = true;
             TESetSelect((short) i, (short) runEnd, te);
             TESetStyle(doColor, &st, false, te);
         }
@@ -264,13 +335,13 @@ static void ApplySpanStyles(TEHandle te, short offset, long textLen,
                             const MdSpan *spans, short count, const short *remap)
 {
     TextStyle base;
-    short timesFont, monacoFont;
+    short bodyFont, monacoFont;
     short nRuns, r, k;
 
-    timesFont = TimesFont();
+    bodyFont = BodyFont();
     monacoFont = MonacoFont();
 
-    base.tsFont = timesFont;
+    base.tsFont = bodyFont;
     base.tsFace = normal;
     base.tsSize = CurrentFontSize();
     base.tsColor.red = base.tsColor.green = base.tsColor.blue = 0;
@@ -283,26 +354,30 @@ static void ApplySpanStyles(TEHandle te, short offset, long textLen,
         MdStyleFields sf;
         TextStyle st;
 
-        if (!run->bold && !run->italic && !run->code && !run->link && !run->strike)
+        if (!run->bold && !run->italic && !run->code && !run->link &&
+            !run->strike && !run->highlight)
             continue;                 /* plain run: base already covers it */
 
         /* One pure pack of every attribute into the style-run fields, then move
            them onto a real TextStyle. The link ID is remapped (local->global)
            here, the one adapter-side concern the pure codec can't own. */
         sf = MdRunToFields(run);
-        st.tsFont = sf.code ? monacoFont : timesFont;
+        st.tsFont = sf.code ? monacoFont : bodyFont;
         st.tsFace = ToolboxFaceFromMd(sf.face);
         st.tsSize = CurrentFontSize();
-        /* Write both colour channels through their owners: SetLinkID sets red
-           (and clears green/blue), then SetStrikeFlag sets green -- byte-for-byte
-           the old raw red=id / green=strike / blue=0, but via the convention's
-           helpers rather than around them. Order matters (SetLinkID zeros green
-           first). The ID is remapped local->global here, the one thing the pure
-           codec can't own. */
+        /* Write all three colour channels through their owners: SetLinkID sets
+           red (and clears green/blue), then SetStrikeFlag sets green and
+           SetHighlightFlag sets blue -- red = id / green = strike / blue =
+           highlight, via the convention's helpers rather than around them. Order
+           matters (SetLinkID zeros green AND blue first). The ID is remapped
+           local->global here, the one thing the pure codec can't own. */
         SetLinkID(&st, remap ? remap[sf.linkID] : sf.linkID);   /* 0 == no link */
-        SetStrikeFlag(&st, (short) (sf.strike ? 1 : 0));
+        SetStrikeFlag(&st, (short) (sf.strike ? 1 : 0));        /* green */
+        SetHighlightFlag(&st, (short) (sf.highlight ? 1 : 0));  /* blue  */
         if (sf.strike)
             gDocHasStrike = true;
+        if (sf.highlight)
+            gDocHasHighlight = true;
         TESetSelect((short) (offset + run->start), (short) (offset + run->end), te);
         TESetStyle(doFont + doFace + doSize + doColor, &st, true, te);
     }
@@ -414,15 +489,16 @@ static short CompactLinkTable(void)
             TEGetStyle((short) runEnd, &st2, &lh2, &fa2, gHiddenTE);
             if (((st2.tsFace & underline) != 0) != underlined ||
                 GetLinkID(&st2) != id ||
-                GetStrikeFlag(&st2) != GetStrikeFlag(&st))
+                GetStrikeFlag(&st2) != GetStrikeFlag(&st) ||
+                GetHighlightFlag(&st2) != GetHighlightFlag(&st))
                 break;
             runEnd++;
         }
 
         if (underlined && id >= 1 && id <= gLinkCount && remap[id] != id) {
             /* Rewrite only the link ID (red); keep this run's strike flag
-               (green) -- green is uniform across the run thanks to the break
-               condition above, so st's green stands for the whole run. */
+               (green) and highlight flag (blue) -- both are uniform across the
+               run thanks to the break condition above, so st stands for it. */
             TextStyle ns = st;
 
             ns.tsColor.red = remap[id];
@@ -464,7 +540,7 @@ void ClearStyles(void)
     short savedStart = (**gTE).selStart;
     short savedEnd = (**gTE).selEnd;
 
-    fontNum = TimesFont();
+    fontNum = BodyFont();
     ts.tsFont = fontNum;
     ts.tsFace = normal;
     ts.tsSize = CurrentFontSize();
@@ -558,9 +634,11 @@ void BuildHiddenView(void)
     HUnlock(outH);
     DisposeHandle(outH);
 
-    /* Recompute the strike fast-path flag from scratch: ApplySpanStyles sets
-       it true iff the rebuilt view actually contains a struck run. */
+    /* Recompute the strike and highlight fast-path flags from scratch:
+       ApplySpanStyles sets each true iff the rebuilt view actually contains a
+       struck / highlighted run. */
     gDocHasStrike = false;
+    gDocHasHighlight = false;
 
     /* Base plain style plus the flattened, combined style runs. Whole
        document (offset 0), no link remap (the spans already carry the
@@ -609,15 +687,16 @@ static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
         sf.code = (st.tsFont == monacoFont);
         sf.linkID = GetLinkID(&st);
         sf.strike = GetStrikeFlag(&st);
+        sf.highlight = GetHighlightFlag(&st);
         MdFieldsToRun(&sf, &cur);
 
-        /* Coalesce on the five style booleans only -- NOT linkID: a run keeps
+        /* Coalesce on the six style booleans only -- NOT linkID: a run keeps
            the link ID of its first character, matching the old emit loop (which
            captured a link's URL when it opened and ignored a mid-underline id
            change). */
         if (n > 0 && runs[n - 1].bold == cur.bold && runs[n - 1].italic == cur.italic &&
             runs[n - 1].code == cur.code && runs[n - 1].link == cur.link &&
-            runs[n - 1].strike == cur.strike) {
+            runs[n - 1].strike == cur.strike && runs[n - 1].highlight == cur.highlight) {
             runs[n - 1].end = (i - from) + 1;
         } else if (n < cap) {
             cur.start = i - from;
@@ -1178,13 +1257,13 @@ void ToggleCode(void)
 {
     TextStyle ts;
     short lh, fa;
-    short monacoFont, timesFont;
+    short monacoFont, bodyFont;
 
     monacoFont = MonacoFont();
-    timesFont = TimesFont();
+    bodyFont = BodyFont();
 
     TEGetStyle((**gHiddenTE).selStart, &ts, &lh, &fa, gHiddenTE);
-    ts.tsFont = (ts.tsFont == monacoFont) ? timesFont : monacoFont;
+    ts.tsFont = (ts.tsFont == monacoFont) ? bodyFont : monacoFont;
     TESetStyle(doFont, &ts, true, gHiddenTE);
 }
 
@@ -1217,6 +1296,34 @@ void ToggleStrike(void)
         TESetStyle(doColor, &ts, true, gHiddenTE);
     } else {
         SetStrikeRange(gHiddenTE, selStart, selEnd, on);
+        TESetSelect(selStart, selEnd, gHiddenTE);
+    }
+}
+
+/*
+    Highlight toggle in Writer mode -- the blue-channel twin of ToggleStrike.
+    Highlight isn't a native text face, so it rides tsColor.blue and the visible
+    band is painted by DrawHighlightRuns; the caller repaints the content area
+    afterward so it appears (or a cleared one is erased).
+*/
+void ToggleHighlight(void)
+{
+    short selStart = (**gHiddenTE).selStart;
+    short selEnd = (**gHiddenTE).selEnd;
+    TextStyle ts;
+    short lh, fa, on;
+
+    TEGetStyle(selStart, &ts, &lh, &fa, gHiddenTE);
+    on = GetHighlightFlag(&ts) ? 0 : 1;
+
+    if (on)
+        gDocHasHighlight = true;
+
+    if (selStart == selEnd) {
+        SetHighlightFlag(&ts, on);
+        TESetStyle(doColor, &ts, true, gHiddenTE);
+    } else {
+        SetHighlightRange(gHiddenTE, selStart, selEnd, on);
         TESetSelect(selStart, selEnd, gHiddenTE);
     }
 }
@@ -1268,7 +1375,7 @@ static void SetTypingStyleNormal(short pos)
     TextStyle ts;
     short fontNum;
 
-    fontNum = TimesFont();
+    fontNum = BodyFont();
     ts.tsFont = fontNum;
     ts.tsFace = normal;
     ts.tsSize = CurrentFontSize();
@@ -1331,6 +1438,10 @@ void DetectInlineMarkdown(char justTyped)
         /* Strike shares tsColor with links, so it goes through the same
            read-modify-write path (never a plain TESetStyle). */
         SetStrikeRange(gHiddenTE, e.styleStart, e.styleEnd, 1);
+    } else if (e.kind == MD_KIND_HIGHLIGHT) {
+        /* Highlight is the blue-channel twin of strike -- same colour-preserving
+           read-modify-write path so it never disturbs a run's link ID or strike. */
+        SetHighlightRange(gHiddenTE, e.styleStart, e.styleEnd, 1);
     } else {
         short mode;
         short linkID = 0;
@@ -1361,7 +1472,7 @@ void ClearSelectionStyleHidden(void)
     if ((**gHiddenTE).selStart == (**gHiddenTE).selEnd)
         return;
 
-    fontNum = TimesFont();
+    fontNum = BodyFont();
     ts.tsFont = fontNum;
     ts.tsFace = normal;
     ts.tsSize = CurrentFontSize();
@@ -1445,6 +1556,7 @@ void DoStyleCommand(short menuItem)
             case iItalic: ToggleFace(italic); break;
             case iCode:   ToggleCode(); break;
             case iStrike: ToggleStrike(); break;
+            case iHighlight: ToggleHighlight(); break;
             case iH1:     ToggleHeadingHidden(1); break;
             case iH2:     ToggleHeadingHidden(2); break;
             case iH3:     ToggleHeadingHidden(3); break;
@@ -1462,6 +1574,7 @@ void DoStyleCommand(short menuItem)
             case iItalic: WrapSelection("*", "*"); break;
             case iCode:   WrapSelection("`", "`"); break;
             case iStrike: WrapSelection("~~", "~~"); break;
+            case iHighlight: WrapSelection("==", "=="); break;
             case iH1:     ApplyHeading(1); break;
             case iH2:     ApplyHeading(2); break;
             case iH3:     ApplyHeading(3); break;
@@ -1622,6 +1735,141 @@ void DrawStruckRuns(TEHandle te)
                 PenMode(patCopy);
                 SetRect(&lineRect, x0, y, (short) (x0 + w), (short) (y + 1));
                 PaintRect(&lineRect);
+            }
+            c = segEnd;
+        }
+    }
+    HUnlock(hText);
+
+    TextFont(saveFont);
+    TextFace(saveFace);
+    TextSize(saveSize);
+    SetPenState(&savePen);
+    SetClip(saveClip);
+    DisposeRgn(saveClip);
+}
+
+/*
+    Paints a light-gray stipple band behind every highlighted run (tsColor.blue
+    == 1) visible in te's view -- the ==mark== background, which TextEdit can't
+    draw. The blue-channel twin of DrawStruckRuns: same visible-line walk and
+    per-run segment measuring, guarded by gDocHasHighlight so a highlight-free
+    document never sweeps. Unlike the strike line, the band is drawn with
+    PenMode(patOr): the gray pattern's black dots land only on the WHITE gaps
+    around the glyphs (OR leaves already-black text untouched), so the marked
+    text stays fully legible on a stippled field -- the readable 1-bit highlight.
+    Call it right before DrawStruckRuns wherever the struck line is repainted, so
+    a struck highlight shows both.
+*/
+void DrawHighlightRuns(TEHandle te)
+{
+    Rect view;
+    short nLines, L;
+    long teLen;
+    Handle hText;
+    PenState savePen;
+    short saveFont, saveFace, saveSize;
+    RgnHandle saveClip;
+    Rect clipR;
+    Pattern grayPat;
+
+    if (!gDocHasHighlight)
+        return;
+
+    view = (**te).viewRect;
+    nLines = (**te).nLines;
+    teLen = (**te).teLength;
+    hText = (**te).hText;
+    if (teLen == 0 || nLines == 0 || hText == NULL)
+        return;
+
+    saveClip = NewRgn();
+    if (saveClip == NULL)
+        return;
+    GetClip(saveClip);
+    if (!SectRect(&view, &(**saveClip).rgnBBox, &clipR))
+        clipR = view;
+    ClipRect(&clipR);
+
+    GetPenState(&savePen);
+    saveFont = qd.thePort->txFont;
+    saveFace = qd.thePort->txFace;
+    saveSize = qd.thePort->txSize;
+    PenNormal();
+    /* Light-gray pattern built by hand rather than read from qd.ltGray, for the
+       same reason DrawStruckRuns builds its black pattern: the QuickDraw globals
+       aren't reliably initialised under the MPW-interfaces build. This is the
+       standard 25%-gray fill. */
+    grayPat.pat[0] = 0x88; grayPat.pat[1] = 0x22;
+    grayPat.pat[2] = 0x88; grayPat.pat[3] = 0x22;
+    grayPat.pat[4] = 0x88; grayPat.pat[5] = 0x22;
+    grayPat.pat[6] = 0x88; grayPat.pat[7] = 0x22;
+
+    HLock(hText);
+    for (L = 0; L < nLines; L++) {
+        long ls = (**te).lineStarts[L];
+        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
+        Point base = TEGetPoint((short) ls, te);
+        long c;
+
+        if (base.v < view.top - MAX_LINE_HEIGHT)
+            continue;
+        if (base.v - MAX_LINE_HEIGHT > view.bottom)
+            break;
+
+        c = ls;
+        while (c < le) {
+            TextStyle st;
+            short lh, fa;
+            long segEnd;
+            short segFont, segFace, segSize;
+            FontInfo fi;
+            Point p;
+            short x0, w;
+
+            TEGetStyle((short) c, &st, &lh, &fa, te);
+            if (!GetHighlightFlag(&st)) {
+                c++;
+                continue;
+            }
+
+            segFont = st.tsFont;
+            segFace = st.tsFace;
+            segSize = st.tsSize;
+            segEnd = c + 1;
+            while (segEnd < le) {
+                TextStyle st2;
+                short lh2, fa2;
+
+                TEGetStyle((short) segEnd, &st2, &lh2, &fa2, te);
+                if (!GetHighlightFlag(&st2) || st2.tsFont != segFont ||
+                    st2.tsFace != segFace || st2.tsSize != segSize)
+                    break;
+                segEnd++;
+            }
+
+            p = TEGetPoint((short) c, te);
+            x0 = p.h;
+            TextFont(segFont);
+            TextFace(segFace);
+            TextSize(segSize);
+            GetFontInfo(&fi);
+            w = TextWidth(*hText, (short) c, (short) (segEnd - c));
+            if (w > 0) {
+                /* Band from the glyph top (ascent above the baseline) to the
+                   baseline+descent. p.v is the line BOTTOM, so the baseline sits
+                   one descent up. Re-assert the hilite bit as DrawStruckRuns does
+                   so the fill isn't remapped to the highlight colour. */
+                Rect band;
+                short yTop = (short) (p.v - fi.descent - fi.ascent);
+                short yBot = (short) (p.v);
+                LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
+                ForeColor(blackColor);
+                BackColor(whiteColor);
+                PenPat(&grayPat);
+                PenMode(patOr);
+                SetRect(&band, x0, yTop, (short) (x0 + w), yBot);
+                PaintRect(&band);
             }
             c = segEnd;
         }

@@ -23,6 +23,8 @@
 #include <Folders.h>
 #include <Gestalt.h>
 #include <Errors.h>
+#include <LowMem.h>
+#include <DateTimeUtils.h>
 #include <string.h>
 #include "mdcore.h"
 
@@ -41,6 +43,19 @@
 #define MARGIN_BOTTOM 24
 #define MENU_BAR_HEIGHT 20
 #define FONT_SIZE 18
+
+/* Document-window presentation mode (ADR 0002). Full screen is a borderless
+   plainDBox filling the screen (the default, distraction-free look); windowed
+   is a titled, draggable, resizable documentProc window. kGrowIconSize is the
+   15x15 grow-box the windowed proc reserves at the bottom-right, which the text
+   column and scrollbar keep clear of. */
+#define kWindowModeFullScreen 0
+#define kWindowModeWindowed   1
+#define kGrowIconSize         15
+#define kTitleBarHeight       20   /* room a documentProc title bar occupies   */
+#define kWindowInset           3   /* desktop showing around a windowed window  */
+#define kMinWindowWidth      240   /* GrowWindow lower bounds                    */
+#define kMinWindowHeight     160
 /* Generous upper bound on a single line's pixel height (the largest heading,
    H1, is ~30pt); used only as visibility slack when culling lines in
    DrawStruckRuns, so it just has to be >= any real line height. */
@@ -50,6 +65,11 @@
 #define kReturnKey    0x0D
 #define kEnterKey     0x03
 #define kEscapeKey    0x1B
+/* Navigation keys (charCodes), for the scroll shortcuts in ScrollByKey. */
+#define kHomeKey      0x01
+#define kEndKey       0x04
+#define kPageUpKey    0x0B
+#define kPageDownKey  0x0C
 
 #define mFile      128
 #define iNew       1
@@ -69,17 +89,36 @@
 #define iCopy    5
 #define iPaste   6
 #define iSelectAll 8
+/* item 9 is a separator */
+#define iFindReplace 10
+#define iFindAgain   11
+#define iWordCount   12
+/* item 13 is a separator */
+#define iPreferences 14
 
-#define mStyle   129
-#define iBold    1
-#define iItalic  2
-#define iCode    3
-#define iStrike  4
-#define iH1      6
-#define iH2      7
-#define iH3      8
-#define iLink    10
-#define iNone    12
+/* Find & Replace dialog (ADR 0003). */
+#define kFindDialog     138
+#define iFindBtn        1
+#define iFindCancel     2
+#define iReplaceAllBtn  3
+#define iFindField      5
+#define iReplaceField   7
+#define iFindCaseChk    8
+
+#define mStyle    129
+#define iBold      1
+#define iItalic    2
+#define iCode      3
+#define iStrike    4
+#define iHighlight 5
+/* item 6 is a separator */
+#define iH1        7
+#define iH2        8
+#define iH3        9
+/* item 10 is a separator */
+#define iLink      11
+/* item 12 is a separator */
+#define iNone      13
 
 #define kSaveChangesAlert 130
 #define kSaveBtn          1
@@ -114,12 +153,23 @@
    user knows Command-period cancels (Inside Macintosh II). */
 #define kPrintStatusDialog  136
 
+/* Preferences dialog (ADR 0002). Four pop-up menus rendered as userItems. */
+#define kPrefsDialog     137
+#define iPrefOK          1
+#define iPrefCancel      2
+#define iPrefWindowPopup 5
+#define iPrefViewPopup   7
+#define iPrefFontPopup   9
+#define iPrefZoomPopup   11
+
 #define mView        130
 #define iMarkdownView 1
 #define iWriterView  2
 #define iZoomIn      4
 #define iZoomOut     5
 #define iZoomDefault 6
+/* item 7 is a separator */
+#define iFullScreen  8
 
 /* The Apple menu (id 1, drawn leftmost) carries About + the desk
    accessories. About lives here, its conventional classic-Mac home,
@@ -154,8 +204,31 @@
 #define kNumZoomLevels 5
 #define kZoomBaselineIndex 2
 
-#define kZoomPrefType 'ZLvl'
-#define kZoomPrefID   128
+/* Body-font choices for the Font preference (ADR 0002). Index 0 (Times) is the
+   built-in default and the fallback whenever a chosen font isn't installed. The
+   name table and GetFNum validation live in zoom.c. */
+#define kNumFontChoices 3
+
+/*
+    Preferences (ADR 0002). One versioned record holds every persisted setting.
+    It lives in the System Folder: the Preferences folder on System 7 (via
+    FindFolder), or loose in the System Folder on System 6 (located through the
+    BootDrive low-memory global) -- see OpenPrefsFile in zoom.c. A missing or
+    stale record just leaves the built-in defaults untouched. viewMode mirrors
+    gHideMarkdown (1 = Writer, 0 = Markdown).
+*/
+#define kPrefsVersion 1
+#define kPrefsResType 'Pref'
+#define kPrefsResID   128
+#define kPrefsFileName "\pArtful Type Preferences"
+
+typedef struct {
+    short version;      /* kPrefsVersion                                  */
+    short windowMode;   /* kWindowModeFullScreen / kWindowModeWindowed    */
+    short viewMode;     /* 1 = Writer (gHideMarkdown), 0 = Markdown        */
+    short fontChoice;   /* index into the body-font table (0 = Times)      */
+    short zoomIndex;    /* 0..kNumZoomLevels-1                             */
+} AtPrefs;
 
 /*
     Undo/redo snapshots store the *canonical markdown text* regardless
@@ -210,6 +283,8 @@ extern MenuHandle gViewMenu;
 extern MenuHandle gEditMenu;
 extern Boolean gHideMarkdown;
 extern short gZoomIndex;
+extern short gWindowMode;
+extern short gFontChoice;
 
 extern UndoSnapshot gUndoStack[MAX_UNDO_LEVELS];
 extern short gUndoCount;
@@ -222,6 +297,9 @@ extern short gLinkCount;
 
 /* main.c */
 Boolean HasSystem7(void);
+void UpdateWindowTitle(void);
+void ApplyDocumentFont(void);
+void SetWindowMode(short newMode);
 
 /* scrolling.c */
 void UpdateScrollbarRange(void);
@@ -229,6 +307,7 @@ void AdjustScrollbar(void);
 void ScrollCaretIntoView(void);
 void DoScrollClick(Point pt);
 void InvalidateHeightCache(void);
+Boolean ScrollByKey(unsigned char key);
 
 /* markdown.c */
 void ClearStyles(void);
@@ -245,10 +324,12 @@ void ToggleFace(Style face);
 void DoLinkHidden(void);
 void ToggleCode(void);
 void ToggleStrike(void);
+void ToggleHighlight(void);
 void ToggleHeadingHidden(short level);
 void DetectInlineMarkdown(char justTyped);
 void DoStyleCommand(short menuItem);
 void DrawStruckRuns(TEHandle te);
+void DrawHighlightRuns(TEHandle te);
 void ClearSelectionStyleHidden(void);
 void ClearMarkdownInSelection(void);
 
@@ -265,9 +346,13 @@ void DoSelectAll(void);
 
 /* zoom.c */
 short CurrentFontSize(void);
-void LoadZoomPref(void);
+void LoadPrefs(void);
+void SavePrefs(void);
 void DoZoom(short direction);
 void DoZoomReset(void);
+short BodyFontNum(void);
+ConstStr255Param FontChoiceName(short choice);
+void DoPreferences(void);
 
 /* file.c */
 void ShowError(StringPtr msg);
@@ -283,6 +368,11 @@ void DoNewFile(void);
 /* print.c */
 void DoPageSetup(void);
 void DoPrint(void);
+
+/* find.c */
+void DoFindReplace(void);
+void DoFindAgain(void);
+void DoWordCount(void);
 
 /* splash.c */
 void ShowSplashScreen(void);

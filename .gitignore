@@ -9,6 +9,9 @@ vmac/*.ini
 !disk-base/system6.dsk
 dist/
 build/
+build-mpw/
+# Local emulator sandbox (Mini vMac.app, ROM, disk images) -- not distributable.
+emu/
 .DS_Store
 # Ignore local Claude state, but track the shared project rules.
 .claude/*

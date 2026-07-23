@@ -29,12 +29,13 @@
    (i.e. after the delimiter characters have been removed). kind is one
    of the MD_KIND_* letters below; level is 1..3 for a heading, else 0;
    linkID is a 1-based index into an MdLinkTable for a link, else 0. */
-#define MD_KIND_BOLD    'B'
-#define MD_KIND_ITALIC  'I'
-#define MD_KIND_CODE    'C'
-#define MD_KIND_LINK    'L'
-#define MD_KIND_HEADING 'H'
-#define MD_KIND_STRIKE  'S'
+#define MD_KIND_BOLD      'B'
+#define MD_KIND_ITALIC    'I'
+#define MD_KIND_CODE      'C'
+#define MD_KIND_LINK      'L'
+#define MD_KIND_HEADING   'H'
+#define MD_KIND_STRIKE    'S'
+#define MD_KIND_HIGHLIGHT 'M'  /* ==mark==; 'M' for mark, 'H' is taken by heading */
 
 typedef struct {
     long  start;
@@ -67,8 +68,8 @@ typedef struct {
 
 /*
     Strips markdown delimiters (**bold**, *italic*, `code`, ~~strike~~,
-    ***bold italic***, [text](url), and leading "# " headings) from
-    src[0..len), writing the surviving text to out and recording where each
+    ==highlight==, ***bold italic***, [text](url), and leading "# " headings)
+    from src[0..len), writing the surviving text to out and recording where each
     styled run landed.
 
     Inline styles NEST: the content of a delimiter pair is itself stripped, so
@@ -107,6 +108,7 @@ typedef struct {
     int   code;
     int   link;
     int   strike;
+    int   highlight;
     short linkID;
 } MdRun;
 
@@ -144,10 +146,11 @@ short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
     the round-trip below is unit-testable off the Mac.
 */
 typedef struct {
-    short face;    /* OR of MD_FACE_*                         */
-    int   code;    /* 1 => the run uses the code (Monaco) font */
-    short linkID;  /* red channel: 1..MD_MAX_LINKS, 0 == none  */
-    int   strike;  /* green channel: 1 == struck               */
+    short face;      /* OR of MD_FACE_*                         */
+    int   code;      /* 1 => the run uses the code (Monaco) font */
+    short linkID;    /* red channel: 1..MD_MAX_LINKS, 0 == none  */
+    int   strike;    /* green channel: 1 == struck               */
+    int   highlight; /* blue channel: 1 == ==marked==            */
 } MdStyleFields;
 
 /*
@@ -181,7 +184,7 @@ short MdHeadingLevelForSize(short baseSize, short size);
 
 /*
     Emits inline markdown (**bold**, *italic*, `code`, ~~strike~~,
-    [text](url)) for
+    ==highlight==, [text](url)) for
     src[0..len) given `runs` that partition it -- contiguous, in order,
     covering every character. Delimiters open and close as the run
     attributes change, innermost-first on close and outermost-first on
@@ -269,5 +272,23 @@ MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justType
 */
 int MdPaginate(const short *lineHeights, int nLines, int pageHeight,
                short *pageStart, int maxPages);
+
+/*
+    Plain-text helpers (ADR 0003), all pure -- buffers only, no Toolbox.
+
+    MdNormalizeImport cleans a freshly-read buffer in place and returns the new
+    length (never larger): strips a UTF-8 BOM, folds CRLF/LF to the Mac CR line
+    ending, and converts valid UTF-8 to MacRoman (unknown code points -> '?',
+    non-UTF-8 bytes passed through so already-MacRoman text survives).
+
+    MdFind returns the offset of needle in hay at or after `from`, or -1;
+    case-insensitive matching (caseSensitive == 0) folds ASCII only.
+
+    MdWordCount counts whitespace-separated words.
+*/
+long MdNormalizeImport(char *buf, long len);
+long MdFind(const char *hay, long hayLen, const char *needle, long needleLen,
+            long from, int caseSensitive);
+long MdWordCount(const char *buf, long len);
 
 #endif /* MDCORE_H */

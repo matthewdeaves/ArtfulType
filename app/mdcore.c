@@ -161,6 +161,20 @@ static long MdStripInlineAt(const char *src, long i, long end,
             return (j + 2) - i;
         }
     }
+    if (i + 1 < end && src[i] == '=' && src[i + 1] == '=') {
+        long j = i + 2;
+
+        while (j + 1 < end && !(src[j] == '=' && src[j + 1] == '='))
+            j++;
+        if (j + 1 < end) {
+            long outStart = *outLen;
+            MdStripSpanContent(src, i + 2, j, out, outLen,
+                               spans, spanCap, nSpans, links);
+            MdRecordSpan(spans, spanCap, nSpans, outStart, *outLen,
+                         MD_KIND_HIGHLIGHT, 0, 0);
+            return (j + 2) - i;
+        }
+    }
     if (src[i] == '[') {
         long closeBracket = i + 1;
 
@@ -277,17 +291,18 @@ short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
     long c;
 
     for (c = 0; c < textLen; c++) {
-        int b = 0, it = 0, cd = 0, lk = 0, sk = 0;
+        int b = 0, it = 0, cd = 0, lk = 0, sk = 0, hl = 0;
         short id = 0, s;
 
         for (s = 0; s < spanCount; s++) {
             if (spans[s].start <= c && c < spans[s].end) {
                 switch (spans[s].kind) {
-                    case MD_KIND_BOLD:   b = 1; break;
-                    case MD_KIND_ITALIC: it = 1; break;
-                    case MD_KIND_CODE:   cd = 1; break;
-                    case MD_KIND_LINK:   lk = 1; id = spans[s].linkID; break;
-                    case MD_KIND_STRIKE: sk = 1; break;
+                    case MD_KIND_BOLD:      b = 1; break;
+                    case MD_KIND_ITALIC:    it = 1; break;
+                    case MD_KIND_CODE:      cd = 1; break;
+                    case MD_KIND_LINK:      lk = 1; id = spans[s].linkID; break;
+                    case MD_KIND_STRIKE:    sk = 1; break;
+                    case MD_KIND_HIGHLIGHT: hl = 1; break;
                     default: break;  /* MD_KIND_HEADING: line-level, ignored */
                 }
             }
@@ -295,7 +310,8 @@ short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
 
         if (nRuns > 0 && runs[nRuns - 1].bold == b && runs[nRuns - 1].italic == it &&
             runs[nRuns - 1].code == cd && runs[nRuns - 1].link == lk &&
-            runs[nRuns - 1].strike == sk && runs[nRuns - 1].linkID == id) {
+            runs[nRuns - 1].strike == sk && runs[nRuns - 1].highlight == hl &&
+            runs[nRuns - 1].linkID == id) {
             runs[nRuns - 1].end = c + 1;
         } else if (nRuns < cap) {
             runs[nRuns].start = c;
@@ -305,6 +321,7 @@ short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
             runs[nRuns].code = cd;
             runs[nRuns].link = lk;
             runs[nRuns].strike = sk;
+            runs[nRuns].highlight = hl;
             runs[nRuns].linkID = id;
             nRuns++;
         } else if (nRuns > 0) {
@@ -330,6 +347,7 @@ MdStyleFields MdRunToFields(const MdRun *run)
     f.code = run->code ? 1 : 0;
     f.linkID = run->link ? run->linkID : 0;
     f.strike = run->strike ? 1 : 0;
+    f.highlight = run->highlight ? 1 : 0;
     return f;
 }
 
@@ -340,6 +358,7 @@ void MdFieldsToRun(const MdStyleFields *fields, MdRun *run)
     run->code = fields->code ? 1 : 0;
     run->link = (fields->face & MD_FACE_UNDERLINE) != 0;
     run->strike = fields->strike ? 1 : 0;
+    run->highlight = fields->highlight ? 1 : 0;
     run->linkID = fields->linkID;
 }
 
@@ -364,7 +383,7 @@ long MdEmitInline(const char *src, long len,
                   char *out, long outCap)
 {
     long outLen = 0;
-    int inBold = 0, inItalic = 0, inCode = 0, inLink = 0, inStrike = 0;
+    int inBold = 0, inItalic = 0, inCode = 0, inLink = 0, inStrike = 0, inHigh = 0;
     unsigned char curLinkURL[256];
     short r;
 
@@ -384,6 +403,7 @@ long MdEmitInline(const char *src, long len,
        old loop's final i == lineEnd / i == end pass did. */
     for (r = 0; r <= runCount; r++) {
         int wantBold = 0, wantItalic = 0, wantCode = 0, wantLink = 0, wantStrike = 0;
+        int wantHigh = 0;
         short linkID = 0;
         long runStart, runEnd, p;
 
@@ -393,6 +413,7 @@ long MdEmitInline(const char *src, long len,
             wantCode = runs[r].code;
             wantLink = runs[r].link;
             wantStrike = runs[r].strike;
+            wantHigh = runs[r].highlight;
             linkID = runs[r].linkID;
             runStart = runs[r].start;
             runEnd = runs[r].end;
@@ -400,8 +421,8 @@ long MdEmitInline(const char *src, long len,
             runStart = runEnd = len;
         }
 
-        /* Close innermost-first: code, italic, bold, strike, then link (link
-           is the outermost wrapper, [~~bold link~~](url)). */
+        /* Close innermost-first: code, italic, bold, strike, highlight, then
+           link (link is the outermost wrapper, [==~~x~~==](url)). */
         if (inCode && !wantCode) { PUT('`'); inCode = 0; }
         if (inItalic && !wantItalic) { PUT('*'); inItalic = 0; }
         if (inBold && !wantBold) {
@@ -414,6 +435,11 @@ long MdEmitInline(const char *src, long len,
             PUT('~');
             inStrike = 0;
         }
+        if (inHigh && !wantHigh) {
+            PUT('=');
+            PUT('=');
+            inHigh = 0;
+        }
         if (inLink && !wantLink) {
             long k;
             PUT(']');
@@ -424,7 +450,7 @@ long MdEmitInline(const char *src, long len,
             inLink = 0;
         }
 
-        /* Open outermost-first: link, strike, bold, italic, code. */
+        /* Open outermost-first: link, highlight, strike, bold, italic, code. */
         if (!inLink && wantLink) {
             PUT('[');
             inLink = 1;
@@ -437,6 +463,11 @@ long MdEmitInline(const char *src, long len,
             } else {
                 curLinkURL[0] = 0;
             }
+        }
+        if (!inHigh && wantHigh) {
+            PUT('=');
+            PUT('=');
+            inHigh = 1;
         }
         if (!inStrike && wantStrike) {
             PUT('~');
@@ -671,6 +702,48 @@ MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justType
                 }
             }
         }
+    } else if (justTyped == '=') {
+        if (caret >= 4 && buf[caret - 2] == '=' && buf[caret - 1] == '=') {
+            long p = caret - 4;
+
+            while (p >= lineStart) {
+                if (buf[p] == '=' && buf[p + 1] == '=' && p + 2 < caret - 2) {
+                    long innerStart = p + 2;
+                    long innerEnd = caret - 2;
+
+                    e.kind = MD_KIND_HIGHLIGHT;
+                    e.del1Start = innerEnd; e.del1End = caret;
+                    e.del2Start = p;        e.del2End = innerStart;
+                    e.styleStart = p;       e.styleEnd = innerEnd - 2;
+                    e.newCaret = innerEnd - 2;
+                    e.resetNormal = 1;
+                    return e;
+                }
+                p--;
+            }
+
+            /* No opening == behind the caret -- the just-typed == may instead
+               be an OPENING delimiter for a closing == already later in the
+               line (highlight typed closing-first). */
+            {
+                long q = caret + 1;
+
+                while (q + 1 < lineEnd) {
+                    if (buf[q] == '=' && buf[q + 1] == '=') {
+                        long innerEnd = q;
+
+                        e.kind = MD_KIND_HIGHLIGHT;
+                        e.del1Start = innerEnd;  e.del1End = innerEnd + 2;
+                        e.del2Start = caret - 2; e.del2End = caret;
+                        e.styleStart = caret - 2; e.styleEnd = innerEnd - 2;
+                        e.newCaret = caret - 2;
+                        e.resetNormal = 1;
+                        return e;
+                    }
+                    q++;
+                }
+            }
+        }
     } else if (justTyped == ')') {
         long closeParenPos = caret - 1;
         long p = closeParenPos - 1;
@@ -743,4 +816,161 @@ int MdPaginate(const short *lineHeights, int nLines, int pageHeight,
     }
 
     return nPages;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Plain-text helpers (ADR 0003). Pure: buffers only, no Toolbox, host-tested.*/
+/* ------------------------------------------------------------------------- */
+
+/* Maps a Unicode code point to its MacRoman byte for the characters a writer
+   actually meets in imported UTF-8 text -- smart quotes, dashes, ellipsis,
+   bullet, and the common accented Latin letters. Returns 0 for anything not in
+   the table (the caller substitutes '?'). */
+static unsigned char MacRomanForCP(unsigned long cp)
+{
+    switch (cp) {
+    /* General punctuation */
+    case 0x2018: return 0xD4;  /* left single quote  */
+    case 0x2019: return 0xD5;  /* right single quote / apostrophe */
+    case 0x201A: return 0xE2;  /* single low-9 quote */
+    case 0x201C: return 0xD2;  /* left double quote  */
+    case 0x201D: return 0xD3;  /* right double quote */
+    case 0x201E: return 0xE3;  /* double low-9 quote */
+    case 0x2013: return 0xD0;  /* en dash */
+    case 0x2014: return 0xD1;  /* em dash */
+    case 0x2026: return 0xC9;  /* horizontal ellipsis */
+    case 0x2022: return 0xA5;  /* bullet */
+    case 0x00A0: return 0xCA;  /* no-break space */
+    case 0x00AB: return 0xC7;  /* << */
+    case 0x00BB: return 0xC8;  /* >> */
+    /* Lowercase accented */
+    case 0x00E1: return 0x87; case 0x00E0: return 0x88; case 0x00E2: return 0x89;
+    case 0x00E4: return 0x8A; case 0x00E3: return 0x8B; case 0x00E5: return 0x8C;
+    case 0x00E7: return 0x8D; case 0x00E9: return 0x8E; case 0x00E8: return 0x8F;
+    case 0x00EA: return 0x90; case 0x00EB: return 0x91; case 0x00ED: return 0x92;
+    case 0x00EC: return 0x93; case 0x00EE: return 0x94; case 0x00EF: return 0x95;
+    case 0x00F1: return 0x96; case 0x00F3: return 0x97; case 0x00F2: return 0x98;
+    case 0x00F4: return 0x99; case 0x00F6: return 0x9A; case 0x00F5: return 0x9B;
+    case 0x00FA: return 0x9C; case 0x00F9: return 0x9D; case 0x00FB: return 0x9E;
+    case 0x00FC: return 0x9F;
+    /* Uppercase accented */
+    case 0x00C4: return 0x80; case 0x00C5: return 0x81; case 0x00C7: return 0x82;
+    case 0x00C9: return 0x83; case 0x00D1: return 0x84; case 0x00D6: return 0x85;
+    case 0x00DC: return 0x86; case 0x00E6: return 0xBE; case 0x00C6: return 0xAE;
+    /* Misc common symbols */
+    case 0x00A9: return 0xA9;  /* (C) */
+    case 0x00AE: return 0xA8;  /* (R) */
+    case 0x2122: return 0xAA;  /* TM */
+    case 0x00B0: return 0xFB;  /* degree */
+    case 0x00A3: return 0xA3;  /* pound */
+    case 0x20AC: return 0xDB;  /* euro (MacRoman rev) */
+    }
+    return 0;
+}
+
+/*
+    Cleans up a freshly-read text buffer in place and returns the new length
+    (which never grows). Strips a UTF-8 BOM, normalizes CRLF and lone LF to the
+    Mac CR line ending TextEdit expects, and converts valid UTF-8 sequences to
+    MacRoman (known characters via MacRomanForCP, others to '?'). A byte that
+    is not part of a valid UTF-8 sequence is passed through unchanged, so text
+    that is already MacRoman survives intact.
+*/
+long MdNormalizeImport(char *buf, long len)
+{
+    unsigned char *b = (unsigned char *) buf;
+    long in = 0, out = 0;
+
+    if (len >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF)
+        in = 3;
+
+    while (in < len) {
+        unsigned char c = b[in];
+
+        if (c == 0x0D) {                     /* CR (drop a following LF) */
+            b[out++] = 0x0D; in++;
+            if (in < len && b[in] == 0x0A) in++;
+        } else if (c == 0x0A) {              /* lone LF -> CR */
+            b[out++] = 0x0D; in++;
+        } else if (c < 0x80) {               /* ASCII */
+            b[out++] = c; in++;
+        } else if (c >= 0xC0) {              /* possible UTF-8 lead byte */
+            long seqLen = (c >= 0xF0) ? 4 : (c >= 0xE0) ? 3 : 2;
+            int valid = (in + seqLen <= len);
+            long k;
+
+            for (k = 1; valid && k < seqLen; k++)
+                if ((b[in + k] & 0xC0) != 0x80)
+                    valid = 0;               /* not real UTF-8 continuation */
+
+            if (valid) {
+                unsigned long cp = (seqLen == 2) ? (unsigned long)(c & 0x1F)
+                                 : (seqLen == 3) ? (unsigned long)(c & 0x0F)
+                                                 : (unsigned long)(c & 0x07);
+                unsigned char mapped;
+                for (k = 1; k < seqLen; k++)
+                    cp = (cp << 6) | (unsigned long)(b[in + k] & 0x3F);
+                mapped = MacRomanForCP(cp);
+                b[out++] = mapped ? mapped : '?';
+                in += seqLen;
+            } else {
+                b[out++] = c; in++;          /* leave already-MacRoman byte */
+            }
+        } else {                             /* stray 0x80..0xBF: pass through */
+            b[out++] = c; in++;
+        }
+    }
+    return out;
+}
+
+static char MdLowerAscii(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+/*
+    Returns the offset of the first occurrence of needle[0..needleLen) in
+    hay[0..hayLen) at or after `from`, or -1 if none. Case-insensitive folding
+    is ASCII-only (enough for search-as-you-type). Pure.
+*/
+long MdFind(const char *hay, long hayLen, const char *needle, long needleLen,
+            long from, int caseSensitive)
+{
+    long i, j;
+
+    if (needleLen <= 0 || needleLen > hayLen)
+        return -1;
+    if (from < 0)
+        from = 0;
+
+    for (i = from; i + needleLen <= hayLen; i++) {
+        for (j = 0; j < needleLen; j++) {
+            char a = hay[i + j], b = needle[j];
+            if (!caseSensitive) { a = MdLowerAscii(a); b = MdLowerAscii(b); }
+            if (a != b)
+                break;
+        }
+        if (j == needleLen)
+            return i;
+    }
+    return -1;
+}
+
+/* Counts whitespace-separated words in buf[0..len). Pure. */
+long MdWordCount(const char *buf, long len)
+{
+    long i, count = 0;
+    int inWord = 0;
+
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char) buf[i];
+        int isSpace = (c == ' ' || c == '\t' || c == '\r' || c == '\n');
+        if (isSpace)
+            inWord = 0;
+        else if (!inWord) {
+            count++;
+            inWord = 1;
+        }
+    }
+    return count;
 }

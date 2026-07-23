@@ -48,12 +48,17 @@ Style encoding in `gHiddenTE`'s TextEdit style runs: **bold**/**italic** = `tsFa
 underline face + a 1-based link ID stashed in the otherwise-unused `tsColor.red`
 (1..64; 0 = no link), **strikethrough** = a flag in `tsColor.green` (1 = struck;
 QuickDraw has no strike face, so `DrawStruckRuns` overdraws the line after
-TextEdit lays the text down). red and green are independent channels, so a
-struck link keeps both. `GetLinkID`/`SetLinkID` and `GetStrikeFlag`/`SetStrikeFlag`
-own those conventions. IDs/flags ride the style run, so styling follows its text
-through edits automatically. URLs live in `gLinkURLs[]`, keyed by the ID; the
-table is rebuilt in `BuildHiddenView` and compacted by `CompactLinkTable` when
-IDs are exhausted (`MAX_LINKS` = 64).
+TextEdit lays the text down), **highlight** (`==mark==`) = a flag in `tsColor.blue`
+(1 = marked; no face for it either, so `DrawHighlightRuns` overpaints a light-gray
+`patOr` stipple — leaving the black glyphs intact — after the text is laid down).
+The three colour channels are independent, so a highlighted struck link keeps all
+of red/green/blue. `GetLinkID`/`SetLinkID`, `GetStrikeFlag`/`SetStrikeFlag` and
+`GetHighlightFlag`/`SetHighlightFlag` own those conventions; the read-modify-write
+range setters (`SetStrikeRange`/`SetHighlightRange`) and `CompactLinkTable` break
+runs on all three channels so writing one never clobbers another. IDs/flags ride
+the style run, so styling follows its text through edits automatically. URLs live
+in `gLinkURLs[]`, keyed by the ID; the table is rebuilt in `BuildHiddenView` and
+compacted by `CompactLinkTable` when IDs are exhausted (`MAX_LINKS` = 64).
 
 **Inline styles nest.** `MdStrip` parses nested delimiters recursively, so
 `~~**x**~~`, `***x***`, `[**x**](u)` and friends round-trip through the
