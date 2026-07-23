@@ -24,12 +24,19 @@
 > [ADR 0003 — "Block-level tier completed"](../adr/0003-content-features-from-darkcruix2.md).
 > **Every feature in this plan is implemented.**
 >
-> **Architecture follow-on (candidate C):** the `main.c` `keyDown` arm (doc-cap
-> gating, `ScrollByKey`, `TEKey`, `DetectInlineMarkdown`, `ExpandDateKeyword`)
-> could gain a `HandleContentKey()` front door. Still **flagged, not scheduled** —
-> the block features landed as draw-time overlays with no new keystroke handling
-> (no list Return-continuation), so the arm did not grow this cycle; the draw-call
-> duplication that *was* growing is now resolved by `DrawWriterOverlays`.
+> **Architecture (improve-codebase-architecture, cycle 3+4):** two candidates
+> applied. **A/B** consolidated the four overlay call sites into one
+> `DrawWriterOverlays` entry point and gave the fenced-code test one home
+> (`LineInCodeFence`). **C — merge the six overlay sweeps into one line walk —
+> is now DONE (v0.5.1-alpha):** `DrawWriterOverlays` walks the display lines once,
+> classifies each (fence/rule/quote/list), and dispatches per-line helpers
+> (`ShadeCodeLine`/`PaintHighlightLine`/`PaintBlockquoteBars`/`PaintListMarker`/
+> `StrikeLineRuns`/`PaintRule`), cutting the per-keystroke cost from six line-walks
+> to one and computing each line's classification once. Behaviour is unchanged
+> (verified by adversarial review against the six-pass version). **Candidate D**
+> (a `HandleContentKey()` front door for the `main.c keyDown` arm) stays flagged,
+> not scheduled — the block features added no keystroke logic, so the arm did not
+> grow.
 
 Implements [ADR 0003](../adr/0003-content-features-from-darkcruix2.md). Three
 tiers, quick-wins first, block-level Markdown last. Independent of the
