@@ -79,9 +79,13 @@ pure `MdIsHorizontalRule`), **blockquote** (`> ` → `DrawBlockquoteRuns` margin
 `DrawCodeBlockRuns` gray stipple across the fenced region, `MdIsCodeFence`), and
 **lists** (`- `/`* `/`+ ` bullets → a drawn `•`, and `- [ ]`/`- [x]` task boxes →
 `DrawListRuns`, `MdParseListItem`; numbered `1. ` stays literal). All six Writer
-overpaints (these plus strike and highlight) run through one `DrawWriterOverlays`
-entry point. For blocks whose markers would otherwise be hidden, the caret's own
-line is left literal so it stays editable (the `revealActive` flag). Because the
+overpaints (these plus strike and highlight) are painted by one
+`DrawWriterOverlays` pass that walks the display lines **once**, classifies each
+line (fence/rule/quote/list, tracked across wrapped lines) and dispatches small
+per-line helpers (`ShadeCodeLine`, `PaintHighlightLine`, `PaintBlockquoteBars`,
+`PaintListMarker`, `StrikeLineRuns`, `PaintRule`) back-to-front — one walk, not
+six. For blocks whose markers would otherwise be hidden, the caret's own line is
+left literal so it stays editable (the `revealActive` flag). Because the
 Writer buffer text always equals the canonical text for these lines, the round-trip
 is lossless by construction.
 

@@ -1586,307 +1586,28 @@ void DoStyleCommand(short menuItem)
     AdjustScrollbar();
 }
 
-/*
-    Paints the strike-through line over every struck run (tsColor.green == 1)
-    visible in te's view. Strike is not a native text face, so TextEdit never
-    draws it; this is called immediately after TextEdit lays the text down (in
-    DoUpdate, and after each Writer-mode keystroke) so the line always tracks
-    the text. Scrolling needs no special case: TEScroll shifts the drawn line
-    with the text, and any newly exposed line repaints through here.
+/* =========================================================================
+   Writer-view overlays.
 
-    Walks display lines via the TERec's lineStarts[], skips those outside the
-    view, and within each visible line draws one segment per maximal run of
-    struck characters sharing a font/face/size (so TextWidth measures it). The
-    per-visible-line cost mirrors the existing per-char TEGetStyle sweeps, so
-    gDocHasStrike short-circuits the whole thing for the common document that
-    has no strikethrough -- no per-keystroke sweep unless strike is in play.
-    (Only meaningful for gHiddenTE; gTE never carries the green flag, and its
-    caller in the Markdown-mode path is already gated on gHideMarkdown.)
+   TextEdit lays the text (and native bold/italic/underline/heading/link faces)
+   down; everything else the Writer view shows -- the code-block and highlight
+   background stipples, blockquote margin bars, list markers, strike lines, and
+   horizontal rules -- has no TextEdit representation and is overpainted here.
 
-    TEScroll redraws the scrolled text immediately without posting an update
-    event, so it does NOT repaint the overpainted strike line -- every scroll
-    path (scrolling.c) calls this afterward in Writer mode, the same way the
-    keystroke path in main.c does.
+   All six features share ONE walk over the display lines (DrawWriterOverlays).
+   Each per-line helper below draws just its own layer for a line the walk has
+   already classified and confirmed visible; the walk owns the single clip, pen,
+   font and text-mode save/restore. Consolidating the six former per-feature
+   sweeps into one walk cuts the per-keystroke cost from six line-walks to one
+   and computes each line's fence/rule/quote/list classification exactly once.
 
-    The line is stroked the same way DrawHrRuns draws its rule (ForeColor black +
-    LineTo), which was the fix for issue #9 -- the older PaintRect fill came out
-    white when the run was unselected.
-*/
-void DrawStruckRuns(TEHandle te)
-{
-    Rect view;
-    short nLines, L;
-    long teLen;
-    Handle hText;
-    PenState savePen;
-    short saveFont, saveFace, saveSize;
-    RgnHandle saveClip;
-    Rect clipR;
-
-    if (!gDocHasStrike)
-        return;
-
-    view = (**te).viewRect;
-    nLines = (**te).nLines;
-    teLen = (**te).teLength;
-    hText = (**te).hText;
-    if (teLen == 0 || nLines == 0 || hText == NULL)
-        return;
-
-    saveClip = NewRgn();
-    if (saveClip == NULL)
-        return;
-    GetClip(saveClip);
-    /* Confine drawing to the text view intersected with whatever clip is
-       already in force (the update region inside DoUpdate, the full port when
-       called after a keystroke) so a partially-visible top/bottom line can't
-       spill over the margins or scrollbar. */
-    if (!SectRect(&view, &(**saveClip).rgnBBox, &clipR))
-        clipR = view;
-    ClipRect(&clipR);
-
-    GetPenState(&savePen);
-    saveFont = qd.thePort->txFont;
-    saveFace = qd.thePort->txFace;
-    saveSize = qd.thePort->txSize;
-    PenNormal();
-
-    HLock(hText);
-    for (L = 0; L < nLines; L++) {
-        long ls = (**te).lineStarts[L];
-        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
-        Point base = TEGetPoint((short) ls, te);
-        long c;
-
-        if (base.v < view.top - MAX_LINE_HEIGHT)
-            continue;                 /* wholly above the view */
-        if (base.v - MAX_LINE_HEIGHT > view.bottom)
-            break;                    /* this and every later line are below */
-
-        c = ls;
-        while (c < le) {
-            TextStyle st;
-            short lh, fa;
-            long segEnd;
-            short segFont, segFace, segSize;
-            FontInfo fi;
-            Point p;
-            short x0, y, w;
-
-            TEGetStyle((short) c, &st, &lh, &fa, te);
-            if (!GetStrikeFlag(&st)) {
-                c++;
-                continue;
-            }
-
-            segFont = st.tsFont;
-            segFace = st.tsFace;
-            segSize = st.tsSize;
-            segEnd = c + 1;
-            while (segEnd < le) {
-                TextStyle st2;
-                short lh2, fa2;
-
-                TEGetStyle((short) segEnd, &st2, &lh2, &fa2, te);
-                if (!GetStrikeFlag(&st2) || st2.tsFont != segFont ||
-                    st2.tsFace != segFace || st2.tsSize != segSize)
-                    break;
-                segEnd++;
-            }
-
-            p = TEGetPoint((short) c, te);
-            x0 = p.h;
-            TextFont(segFont);
-            TextFace(segFace);
-            TextSize(segSize);
-            /* TEGetPoint's vertical is the BOTTOM of the line, so the text
-               baseline sits one descent higher. Strike through the middle of
-               the glyph body -- about a third of the ascent above the baseline.
-               (The original code treated p.v as the baseline and used the
-               style's fontAscent, which dropped the line onto the baseline
-               where it read as an underline.) GetFontInfo reflects the font/
-               face/size just set above. */
-            GetFontInfo(&fi);
-            y = (short) (p.v - fi.descent - fi.ascent / 3);
-            w = TextWidth(*hText, (short) c, (short) (segEnd - c));
-            if (w > 0) {
-                /* Draw the line exactly the way DrawHrRuns strokes its rule --
-                   PenNormal's black pattern + ForeColor(blackColor) + LineTo --
-                   which renders reliably black on both tested emulators. The
-                   earlier PaintRect + PenPat + PenMode(patCopy) + hilite-bit
-                   approach came out WHITE when the run was unselected (issue #9);
-                   a diagnostic PaintRect *before* the per-run TextEdit calls was
-                   black while the same fill *after* them was white, so those calls
-                   were leaving the port in a state PaintRect honoured but LineTo
-                   (like the working HR rule) does not. Re-assert the pen each
-                   segment because the per-run TextFont/Face/Size calls above touch
-                   the port. */
-                ForeColor(blackColor);
-                PenSize(1, 1);
-                PenMode(patCopy);
-                MoveTo(x0, y);
-                LineTo((short) (x0 + w - 1), y);
-            }
-            c = segEnd;
-        }
-    }
-    HUnlock(hText);
-
-    TextFont(saveFont);
-    TextFace(saveFace);
-    TextSize(saveSize);
-    SetPenState(&savePen);
-    SetClip(saveClip);
-    DisposeRgn(saveClip);
-}
-
-/*
-    Paints a light-gray stipple band behind every highlighted run (tsColor.blue
-    == 1) visible in te's view -- the ==mark== background, which TextEdit can't
-    draw. The blue-channel twin of DrawStruckRuns: same visible-line walk and
-    per-run segment measuring, guarded by gDocHasHighlight so a highlight-free
-    document never sweeps. Unlike the strike line, the band is drawn with
-    PenMode(patOr): the gray pattern's black dots land only on the WHITE gaps
-    around the glyphs (OR leaves already-black text untouched), so the marked
-    text stays fully legible on a stippled field -- the readable 1-bit highlight.
-    Call it right before DrawStruckRuns wherever the struck line is repainted, so
-    a struck highlight shows both.
-*/
-void DrawHighlightRuns(TEHandle te)
-{
-    Rect view;
-    short nLines, L;
-    long teLen;
-    Handle hText;
-    PenState savePen;
-    short saveFont, saveFace, saveSize;
-    RgnHandle saveClip;
-    Rect clipR;
-    Pattern grayPat;
-
-    if (!gDocHasHighlight)
-        return;
-
-    view = (**te).viewRect;
-    nLines = (**te).nLines;
-    teLen = (**te).teLength;
-    hText = (**te).hText;
-    if (teLen == 0 || nLines == 0 || hText == NULL)
-        return;
-
-    saveClip = NewRgn();
-    if (saveClip == NULL)
-        return;
-    GetClip(saveClip);
-    if (!SectRect(&view, &(**saveClip).rgnBBox, &clipR))
-        clipR = view;
-    ClipRect(&clipR);
-
-    GetPenState(&savePen);
-    saveFont = qd.thePort->txFont;
-    saveFace = qd.thePort->txFace;
-    saveSize = qd.thePort->txSize;
-    PenNormal();
-    /* Light-gray pattern built by hand rather than read from qd.ltGray, for the
-       same reason DrawStruckRuns builds its black pattern: the QuickDraw globals
-       aren't reliably initialised under the MPW-interfaces build. This is the
-       standard 25%-gray fill. */
-    grayPat.pat[0] = 0x88; grayPat.pat[1] = 0x22;
-    grayPat.pat[2] = 0x88; grayPat.pat[3] = 0x22;
-    grayPat.pat[4] = 0x88; grayPat.pat[5] = 0x22;
-    grayPat.pat[6] = 0x88; grayPat.pat[7] = 0x22;
-
-    HLock(hText);
-    for (L = 0; L < nLines; L++) {
-        long ls = (**te).lineStarts[L];
-        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
-        Point base = TEGetPoint((short) ls, te);
-        long c;
-
-        if (base.v < view.top - MAX_LINE_HEIGHT)
-            continue;
-        if (base.v - MAX_LINE_HEIGHT > view.bottom)
-            break;
-
-        c = ls;
-        while (c < le) {
-            TextStyle st;
-            short lh, fa;
-            long segEnd;
-            short segFont, segFace, segSize;
-            FontInfo fi;
-            Point p;
-            short x0, w;
-
-            TEGetStyle((short) c, &st, &lh, &fa, te);
-            if (!GetHighlightFlag(&st)) {
-                c++;
-                continue;
-            }
-
-            segFont = st.tsFont;
-            segFace = st.tsFace;
-            segSize = st.tsSize;
-            segEnd = c + 1;
-            while (segEnd < le) {
-                TextStyle st2;
-                short lh2, fa2;
-
-                TEGetStyle((short) segEnd, &st2, &lh2, &fa2, te);
-                if (!GetHighlightFlag(&st2) || st2.tsFont != segFont ||
-                    st2.tsFace != segFace || st2.tsSize != segSize)
-                    break;
-                segEnd++;
-            }
-
-            p = TEGetPoint((short) c, te);
-            x0 = p.h;
-            TextFont(segFont);
-            TextFace(segFace);
-            TextSize(segSize);
-            GetFontInfo(&fi);
-            w = TextWidth(*hText, (short) c, (short) (segEnd - c));
-            if (w > 0) {
-                /* Band from the glyph top (ascent above the baseline) to the
-                   baseline+descent. p.v is the line BOTTOM, so the baseline sits
-                   one descent up. Re-assert the hilite bit as DrawStruckRuns does
-                   so the fill isn't remapped to the highlight colour. */
-                Rect band;
-                short yTop = (short) (p.v - fi.descent - fi.ascent);
-                short yBot = (short) (p.v);
-                LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
-                ForeColor(blackColor);
-                BackColor(whiteColor);
-                PenPat(&grayPat);
-                PenMode(patOr);
-                SetRect(&band, x0, yTop, (short) (x0 + w), yBot);
-                PaintRect(&band);
-            }
-            c = segEnd;
-        }
-    }
-    HUnlock(hText);
-
-    TextFont(saveFont);
-    TextFace(saveFace);
-    TextSize(saveSize);
-    SetPenState(&savePen);
-    SetClip(saveClip);
-    DisposeRgn(saveClip);
-}
-
-/*
-    Renders a Markdown thematic break -- a paragraph of only dash, star or
-    underscore markers (see the pure MdIsHorizontalRule) -- as a drawn horizontal
-    rule in the Writer view, which TextEdit can't do. For each such visible
-    paragraph it erases the marker
-    text and strokes a centered line across the text column. The buffer is never
-    touched, so the canonical Markdown still holds "---" and the round-trip is
-    lossless -- only the drawing changes (the same overpaint idea as
-    DrawStruckRuns/DrawHighlightRuns). When revealActive is true the paragraph the
-    caret sits in is left as literal markers so it can be edited; printing passes
-    false so every rule prints. Writer-mode only (gTE never shows rules).
-*/
+   Because none of these features mutate the buffer text or its style runs --
+   they only draw, and the block markers stay literal -- the Writer buffer text
+   always equals the canonical Markdown, so the round-trip is lossless by
+   construction (the pattern ADR 0003 settled on once the colour channels were
+   full). Writer-mode only: gTE never carries these, and every caller gates on
+   gHideMarkdown.
+   ========================================================================= */
 
 /*
     Advances a running fenced-code-block flag across paragraph lines and reports
@@ -1896,8 +1617,7 @@ void DrawHighlightRuns(TEHandle te)
     carry the returned value across a paragraph's wrapped continuation lines. The
     code-block shade uses it to know what to PAINT; the rule, blockquote and list
     overlays use it to know what to SKIP, so a "---"/"> q"/"- x" line inside a code
-    sample stays literal code rather than being decorated as real Markdown. The
-    single home for "is this line inside a fence" -- all four passes share it.
+    sample stays literal code rather than being decorated as real Markdown.
 */
 static Boolean LineInCodeFence(Handle hText, long ls, long contentLen,
                               Boolean *inFence)
@@ -1909,17 +1629,278 @@ static Boolean LineInCodeFence(Handle hText, long ls, long contentLen,
     return inside;
 }
 
-void DrawHrRuns(TEHandle te, Boolean revealActive)
+/* The standard 25%-gray fill, built by hand rather than read from qd.ltGray:
+   the QuickDraw globals aren't reliably initialised under the MPW-interfaces
+   build. Shared by the code-block and highlight shades. */
+static void GrayStipple(Pattern *p)
 {
-    Rect view;
+    p->pat[0] = 0x88; p->pat[1] = 0x22;
+    p->pat[2] = 0x88; p->pat[3] = 0x22;
+    p->pat[4] = 0x88; p->pat[5] = 0x22;
+    p->pat[6] = 0x88; p->pat[7] = 0x22;
+}
+
+/* Code block: a patOr gray band across the whole text column for one line, so a
+   fenced block reads as a distinct field. patOr leaves the black glyphs alone so
+   the code stays legible. The hilite bit is re-asserted so a colour device
+   doesn't remap the fill to the highlight colour. */
+static void ShadeCodeLine(TEHandle te, Point base, const FontInfo *fi,
+                          const Pattern *gray)
+{
+    Rect band;
+
+    band.left = (**te).destRect.left;
+    band.right = (**te).destRect.right;
+    band.bottom = base.v;
+    band.top = (short) (base.v - fi->ascent - fi->descent);
+    LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
+    ForeColor(blackColor);
+    BackColor(whiteColor);
+    PenPat(gray);
+    PenMode(patOr);
+    PaintRect(&band);
+}
+
+/* Highlight (==mark==): a patOr gray band behind each highlighted run (tsColor.blue
+   == 1) within one line [ls, le), measured per maximal same-font/face/size segment
+   so TextWidth is exact. The blue-channel twin of the strike pass; gDocHasHighlight
+   gates whether the walk calls it at all. */
+static void PaintHighlightLine(TEHandle te, long ls, long le, Handle hText,
+                               const Pattern *gray)
+{
+    long c = ls;
+
+    while (c < le) {
+        TextStyle st;
+        short lh, fa;
+        long segEnd;
+        short segFont, segFace, segSize;
+        FontInfo fi;
+        Point p;
+        short x0, w;
+
+        TEGetStyle((short) c, &st, &lh, &fa, te);
+        if (!GetHighlightFlag(&st)) {
+            c++;
+            continue;
+        }
+        segFont = st.tsFont;
+        segFace = st.tsFace;
+        segSize = st.tsSize;
+        segEnd = c + 1;
+        while (segEnd < le) {
+            TextStyle st2;
+            short lh2, fa2;
+
+            TEGetStyle((short) segEnd, &st2, &lh2, &fa2, te);
+            if (!GetHighlightFlag(&st2) || st2.tsFont != segFont ||
+                st2.tsFace != segFace || st2.tsSize != segSize)
+                break;
+            segEnd++;
+        }
+        p = TEGetPoint((short) c, te);
+        x0 = p.h;
+        TextFont(segFont);
+        TextFace(segFace);
+        TextSize(segSize);
+        GetFontInfo(&fi);
+        w = TextWidth(*hText, (short) c, (short) (segEnd - c));
+        if (w > 0) {
+            Rect band;
+            short yTop = (short) (p.v - fi.descent - fi.ascent);
+            short yBot = (short) (p.v);
+
+            LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
+            ForeColor(blackColor);
+            BackColor(whiteColor);
+            PenPat(gray);
+            PenMode(patOr);
+            SetRect(&band, x0, yTop, (short) (x0 + w), yBot);
+            PaintRect(&band);
+        }
+        c = segEnd;
+    }
+}
+
+/* Blockquote: one vertical bar per nesting level in the left margin, stacked
+   leftward. depth comes from MdBlockquoteDepth (carried across wrapped lines by
+   the walk); viewLeft is the text column's left edge (bars sit just outside it). */
+static void PaintBlockquoteBars(Point base, const FontInfo *fi, short viewLeft, int depth)
+{
+    short yTop = (short) (base.v - fi->ascent - fi->descent);
+    short yBot = base.v;
+    short d, bars = (short) (depth > 4 ? 4 : depth);
+
+    ForeColor(blackColor);
+    PenSize(2, 1);
+    for (d = 0; d < bars; d++) {
+        short x = (short) (viewLeft - 8 - d * 6);
+        MoveTo(x, yTop);
+        LineTo(x, yBot);
+    }
+}
+
+/* List: overpaint a bullet marker with a real bullet glyph, or a task checkbox
+   with a drawn (ticked) box. The marker text is left literal underneath -- only
+   the drawing changes -- so the Markdown round-trips. Needs TextMode(srcOr) (set
+   by the walk) so the bullet paints over the erased white cell transparently. */
+static void PaintListMarker(TEHandle te, long ls, Handle hText, const MdListInfo *info,
+                            const TextStyle *st, const FontInfo *fi, unsigned char bulletCh)
+{
+    long markerStart = ls + info->indent;
+    Point base = TEGetPoint((short) markerStart, te);
+    short x0 = base.h;
+    short baseline = (short) (base.v - fi->descent);
+    short w;
+
+    TextFont(st->tsFont);
+    TextFace(st->tsFace);
+    TextSize(st->tsSize);
+
+    if (info->checkbox) {
+        /* Erase the whole "- [ ] " marker span and draw a box in its place. */
+        Rect box;
+        short side, top;
+
+        w = TextWidth(*hText, (short) markerStart, (short) info->markerChars);
+        SetRect(&box, x0, (short) (base.v - fi->ascent - fi->descent),
+                (short) (x0 + w), base.v);
+        EraseRect(&box);
+
+        side = (short) (fi->ascent - 2);
+        if (side < 6)
+            side = 6;
+        top = (short) (baseline - side);
+        SetRect(&box, x0, top, (short) (x0 + side), baseline);
+        ForeColor(blackColor);
+        PenSize(1, 1);
+        PenMode(patCopy);
+        FrameRect(&box);
+        if (info->checked) {
+            MoveTo(box.left, box.top);
+            LineTo((short) (box.right - 1), (short) (box.bottom - 1));
+            MoveTo((short) (box.right - 1), box.top);
+            LineTo(box.left, (short) (box.bottom - 1));
+        }
+    } else {
+        /* Bullet: erase just the marker character, draw a real bullet, leaving
+           the trailing space (and any nesting indent) in place. */
+        Rect cell;
+
+        w = TextWidth(*hText, (short) markerStart, 1);
+        SetRect(&cell, x0, (short) (base.v - fi->ascent - fi->descent),
+                (short) (x0 + w), base.v);
+        EraseRect(&cell);
+        ForeColor(blackColor);
+        MoveTo(x0, baseline);
+        DrawChar((short) bulletCh);
+    }
+}
+
+/* Strike (~~text~~): a black line through each struck run (tsColor.green == 1)
+   within one line [ls, le), one segment per maximal same-font/face/size run.
+   Stroked with LineTo (not a PaintRect fill) after the fix for issue #9 -- the
+   fill came out white when the run was unselected. gDocHasStrike gates the call. */
+static void StrikeLineRuns(TEHandle te, long ls, long le, Handle hText)
+{
+    long c = ls;
+
+    while (c < le) {
+        TextStyle st;
+        short lh, fa;
+        long segEnd;
+        short segFont, segFace, segSize;
+        FontInfo fi;
+        Point p;
+        short x0, y, w;
+
+        TEGetStyle((short) c, &st, &lh, &fa, te);
+        if (!GetStrikeFlag(&st)) {
+            c++;
+            continue;
+        }
+        segFont = st.tsFont;
+        segFace = st.tsFace;
+        segSize = st.tsSize;
+        segEnd = c + 1;
+        while (segEnd < le) {
+            TextStyle st2;
+            short lh2, fa2;
+
+            TEGetStyle((short) segEnd, &st2, &lh2, &fa2, te);
+            if (!GetStrikeFlag(&st2) || st2.tsFont != segFont ||
+                st2.tsFace != segFace || st2.tsSize != segSize)
+                break;
+            segEnd++;
+        }
+        p = TEGetPoint((short) c, te);
+        x0 = p.h;
+        TextFont(segFont);
+        TextFace(segFace);
+        TextSize(segSize);
+        /* TEGetPoint's vertical is the line BOTTOM; strike through the glyph
+           body, about a third of the ascent above the baseline. */
+        GetFontInfo(&fi);
+        y = (short) (p.v - fi.descent - fi.ascent / 3);
+        w = TextWidth(*hText, (short) c, (short) (segEnd - c));
+        if (w > 0) {
+            ForeColor(blackColor);
+            PenSize(1, 1);
+            PenMode(patCopy);
+            MoveTo(x0, y);
+            LineTo((short) (x0 + w - 1), y);
+        }
+        c = segEnd;
+    }
+}
+
+/* Horizontal rule: erase the marker glyphs and stroke a rule down the line's
+   middle across the text column. The markers stay literal in the buffer. */
+static void PaintRule(TEHandle te, Point base, const FontInfo *fi)
+{
+    Rect band;
+    short midY;
+
+    band.left = (**te).destRect.left;
+    band.right = (**te).destRect.right;
+    band.bottom = base.v;
+    band.top = (short) (base.v - fi->ascent - fi->descent);
+    EraseRect(&band);
+    midY = (short) ((band.top + band.bottom) / 2);
+    PenSize(1, 1);
+    ForeColor(blackColor);
+    MoveTo((short) (band.left + 8), midY);
+    LineTo((short) (band.right - 8), midY);
+}
+
+/*
+    The single Writer-view overlay pass. Walks the display lines once; for each
+    visible line, classifies it (fenced code / rule / blockquote / list, tracked
+    across wrapped continuation lines) and paints its layers back-to-front: code
+    or highlight background, blockquote bars, the rule or list marker, then the
+    strike lines on top. revealActive keeps the caret's own line's markers literal
+    for the block features that would otherwise hide their editable markers (rules
+    and list bullets); the print path passes false so every block renders.
+
+    The clip is widened left into the distraction-free margin so blockquote bars
+    can sit outside the text column; every other layer draws within the column,
+    so the widening is a harmless superset for them. gDocHasStrike/gDocHasHighlight
+    skip the per-character sub-scans for the common document that has neither.
+*/
+void DrawWriterOverlays(TEHandle te, Boolean revealActive)
+{
+    Rect view, wide, clipR;
     short nLines, L;
     long teLen, caret;
     Handle hText;
     PenState savePen;
-    short saveFont, saveFace, saveSize;
+    short saveFont, saveFace, saveSize, saveMode;
     RgnHandle saveClip;
-    Rect clipR;
-    Boolean inFence = false;
+    Pattern grayPat;
+    unsigned char bulletCh = 0xA5;      /* MacRoman bullet */
+    Boolean hasStrike, hasHigh;
+    Boolean inFence = false, curInside = false;
+    int curDepth = 0;
 
     view = (**te).viewRect;
     nLines = (**te).nLines;
@@ -1929,120 +1910,15 @@ void DrawHrRuns(TEHandle te, Boolean revealActive)
     if (teLen == 0 || nLines == 0 || hText == NULL)
         return;
 
-    saveClip = NewRgn();
-    if (saveClip == NULL)
-        return;
-    GetClip(saveClip);
-    if (!SectRect(&view, &(**saveClip).rgnBBox, &clipR))
-        clipR = view;
-    ClipRect(&clipR);
-
-    GetPenState(&savePen);
-    saveFont = qd.thePort->txFont;
-    saveFace = qd.thePort->txFace;
-    saveSize = qd.thePort->txSize;
-    PenNormal();
-
-    HLock(hText);
-    for (L = 0; L < nLines; L++) {
-        long ls = (**te).lineStarts[L];
-        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
-        long contentLen;
-        Point base;
-        TextStyle st;
-        short lh, fa;
-        FontInfo fi;
-        Rect band;
-        short midY;
-
-        /* Must begin a paragraph (so a wrapped continuation can't match). */
-        if (ls != 0 && (*hText)[ls - 1] != '\r')
-            continue;
-        contentLen = le - ls;
-        if (contentLen > 0 && (*hText)[le - 1] == '\r')
-            contentLen--;                 /* drop the paragraph's trailing CR */
-        /* Advance fence state at every paragraph start; a "---" INSIDE a fenced
-           code sample is literal code, not a rule, so skip it. */
-        if (LineInCodeFence(hText, ls, contentLen, &inFence))
-            continue;
-        if (!MdIsHorizontalRule((const char *) (*hText) + ls, contentLen))
-            continue;
-        /* Leave the markers visible on the line being edited. */
-        if (revealActive && caret >= ls && caret <= ls + contentLen)
-            continue;
-
-        base = TEGetPoint((short) ls, te);
-        if (base.v < view.top - MAX_LINE_HEIGHT)
-            continue;                     /* wholly above the view */
-        if (base.v - MAX_LINE_HEIGHT > view.bottom)
-            break;                        /* this and every later line below */
-
-        TEGetStyle((short) ls, &st, &lh, &fa, te);
-        TextFont(st.tsFont);
-        TextFace(st.tsFace);
-        TextSize(st.tsSize);
-        GetFontInfo(&fi);
-
-        /* Erase the marker glyphs, then stroke a rule down the line's middle
-           across the text column (destRect is the wrap column). */
-        band.left = (**te).destRect.left;
-        band.right = (**te).destRect.right;
-        band.bottom = base.v;
-        band.top = (short) (base.v - fi.ascent - fi.descent);
-        EraseRect(&band);
-        midY = (short) ((band.top + band.bottom) / 2);
-        PenSize(1, 1);
-        ForeColor(blackColor);
-        MoveTo((short) (band.left + 8), midY);
-        LineTo((short) (band.right - 8), midY);
-    }
-    HUnlock(hText);
-
-    TextFont(saveFont);
-    TextFace(saveFace);
-    TextSize(saveSize);
-    SetPenState(&savePen);
-    SetClip(saveClip);
-    DisposeRgn(saveClip);
-}
-
-/*
-    Draws a blockquote bar in the left margin beside every '>'-prefixed paragraph
-    (see the pure MdBlockquoteDepth). Like the horizontal rule, the "> " markers
-    are left LITERAL in the Writer text -- nothing is hidden or mutated, so the
-    canonical Markdown round-trips untouched; only a decorative bar is added.
-    Nested quotes get one bar per level, stacked leftward. The bar spans the whole
-    quoted paragraph, including its wrapped continuation lines, so the depth is
-    tracked across display lines and only recomputed at each paragraph start. The
-    clip is widened left into the distraction-free margin (where nothing else
-    draws) so the bar can sit outside the text column. Writer-mode only.
-*/
-void DrawBlockquoteRuns(TEHandle te)
-{
-    Rect view, wide, clipR;
-    short nLines, L;
-    long teLen;
-    Handle hText;
-    PenState savePen;
-    short saveFont, saveFace, saveSize;
-    RgnHandle saveClip;
-    int curDepth = 0;
-    Boolean inFence = false;
-    Boolean curInFence = false;
-
-    view = (**te).viewRect;
-    nLines = (**te).nLines;
-    teLen = (**te).teLength;
-    hText = (**te).hText;
-    if (teLen == 0 || nLines == 0 || hText == NULL)
-        return;
+    hasStrike = gDocHasStrike;
+    hasHigh = gDocHasHighlight;
 
     saveClip = NewRgn();
     if (saveClip == NULL)
         return;
     GetClip(saveClip);
     wide = view;
-    wide.left -= 30;                       /* room for up to four stacked bars */
+    wide.left -= 30;                    /* room for up to four blockquote bars */
     if (!SectRect(&wide, &(**saveClip).rgnBBox, &clipR))
         clipR = wide;
     ClipRect(&clipR);
@@ -2051,256 +1927,48 @@ void DrawBlockquoteRuns(TEHandle te)
     saveFont = qd.thePort->txFont;
     saveFace = qd.thePort->txFace;
     saveSize = qd.thePort->txSize;
-    PenNormal();
-
-    HLock(hText);
-    for (L = 0; L < nLines; L++) {
-        long ls = (**te).lineStarts[L];
-        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
-        Boolean paraStart = (Boolean) (ls == 0 || (*hText)[ls - 1] == '\r');
-        Point base;
-        TextStyle st;
-        short lh, fa;
-        FontInfo fi;
-        short yTop, yBot, d, bars;
-
-        if (paraStart) {
-            long contentLen = le - ls;
-            if (contentLen > 0 && (*hText)[le - 1] == '\r')
-                contentLen--;
-            curDepth = MdBlockquoteDepth((const char *) (*hText) + ls, contentLen);
-            curInFence = LineInCodeFence(hText, ls, contentLen, &inFence);
-        }
-        if (curInFence || curDepth <= 0)     /* "> q" inside a code fence is code */
-            continue;
-
-        base = TEGetPoint((short) ls, te);
-        if (base.v < view.top - MAX_LINE_HEIGHT)
-            continue;
-        if (base.v - MAX_LINE_HEIGHT > view.bottom)
-            break;
-
-        TEGetStyle((short) ls, &st, &lh, &fa, te);
-        TextFont(st.tsFont);
-        TextFace(st.tsFace);
-        TextSize(st.tsSize);
-        GetFontInfo(&fi);
-        yBot = base.v;
-        yTop = (short) (base.v - fi.ascent - fi.descent);
-
-        bars = (short) (curDepth > 4 ? 4 : curDepth);
-        ForeColor(blackColor);
-        PenSize(2, 1);
-        for (d = 0; d < bars; d++) {
-            short x = (short) (view.left - 8 - d * 6);
-            MoveTo(x, yTop);
-            LineTo(x, yBot);
-        }
-    }
-    HUnlock(hText);
-
-    TextFont(saveFont);
-    TextFace(saveFace);
-    TextSize(saveSize);
-    SetPenState(&savePen);
-    SetClip(saveClip);
-    DisposeRgn(saveClip);
-}
-
-/*
-    Shades a light-gray stipple band across every line of a fenced code block --
-    the ``` / ~~~ fence lines and everything between them (see the pure
-    MdIsCodeFence) -- so a code block reads as a distinct field in the Writer view.
-    The fences and code text stay LITERAL (nothing hidden), so the canonical
-    Markdown round-trips untouched. Fence state is tracked across ALL lines
-    (including those scrolled out of view) so a line in the middle of a block is
-    shaded correctly. Uses patOr like DrawHighlightRuns, so any glyphs the block
-    contains stay legible on the stipple. Writer-mode only.
-*/
-void DrawCodeBlockRuns(TEHandle te)
-{
-    Rect view, clipR;
-    short nLines, L;
-    long teLen;
-    Handle hText;
-    PenState savePen;
-    short saveFont, saveFace, saveSize;
-    RgnHandle saveClip;
-    Pattern grayPat;
-    Boolean inFence = false;
-    Boolean curShade;
-
-    view = (**te).viewRect;
-    nLines = (**te).nLines;
-    teLen = (**te).teLength;
-    hText = (**te).hText;
-    if (teLen == 0 || nLines == 0 || hText == NULL)
-        return;
-
-    saveClip = NewRgn();
-    if (saveClip == NULL)
-        return;
-    GetClip(saveClip);
-    if (!SectRect(&view, &(**saveClip).rgnBBox, &clipR))
-        clipR = view;
-    ClipRect(&clipR);
-
-    GetPenState(&savePen);
-    saveFont = qd.thePort->txFont;
-    saveFace = qd.thePort->txFace;
-    saveSize = qd.thePort->txSize;
-    PenNormal();
-    grayPat.pat[0] = 0x88; grayPat.pat[1] = 0x22;
-    grayPat.pat[2] = 0x88; grayPat.pat[3] = 0x22;
-    grayPat.pat[4] = 0x88; grayPat.pat[5] = 0x22;
-    grayPat.pat[6] = 0x88; grayPat.pat[7] = 0x22;
-
-    HLock(hText);
-    curShade = false;
-    for (L = 0; L < nLines; L++) {
-        long ls = (**te).lineStarts[L];
-        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
-        Boolean paraStart = (Boolean) (ls == 0 || (*hText)[ls - 1] == '\r');
-        Point base;
-        TextStyle st;
-        short lh, fa;
-        FontInfo fi;
-        Rect band;
-
-        /* Fence state advances at each paragraph start; a wrapped continuation
-           line inside a block keeps its paragraph's shade. */
-        if (paraStart) {
-            long contentLen = le - ls;
-            if (contentLen > 0 && (*hText)[le - 1] == '\r')
-                contentLen--;
-            curShade = LineInCodeFence(hText, ls, contentLen, &inFence);
-        }
-        if (!curShade)
-            continue;
-
-        base = TEGetPoint((short) ls, te);
-        if (base.v < view.top - MAX_LINE_HEIGHT)
-            continue;
-        if (base.v - MAX_LINE_HEIGHT > view.bottom)
-            break;
-
-        TEGetStyle((short) ls, &st, &lh, &fa, te);
-        TextFont(st.tsFont);
-        TextFace(st.tsFace);
-        TextSize(st.tsSize);
-        GetFontInfo(&fi);
-
-        band.left = (**te).destRect.left;
-        band.right = (**te).destRect.right;
-        band.bottom = base.v;
-        band.top = (short) (base.v - fi.ascent - fi.descent);
-        /* Re-assert the hilite bit before the patOr fill, exactly like
-           DrawHighlightRuns, so a colour device doesn't remap it to the
-           highlight colour. */
-        LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
-        ForeColor(blackColor);
-        BackColor(whiteColor);
-        PenPat(&grayPat);
-        PenMode(patOr);
-        PaintRect(&band);
-    }
-    HUnlock(hText);
-
-    TextFont(saveFont);
-    TextFace(saveFace);
-    TextSize(saveSize);
-    SetPenState(&savePen);
-    SetClip(saveClip);
-    DisposeRgn(saveClip);
-}
-
-/*
-    Renders list markers in the Writer view (see the pure MdParseListItem): a
-    bullet ('-'/'*'/'+') is overpainted with a real '*' bullet glyph (MacRoman
-    $A5), and a task checkbox ("- [ ] " / "- [x] ") with a drawn box (ticked when
-    checked). Numbered markers are already legible ("1.") and are left untouched.
-    As with the rule, the marker TEXT is never modified -- only the drawing -- so
-    the canonical Markdown round-trips losslessly; nesting shows through the
-    literal leading spaces the text already carries. When revealActive is true the
-    caret's own line keeps its literal marker so it stays editable (matching
-    DrawHrRuns). Lines that are actually horizontal rules ("- - -") are left to
-    DrawHrRuns. Writer-mode only.
-*/
-void DrawListRuns(TEHandle te, Boolean revealActive)
-{
-    Rect view, clipR;
-    short nLines, L;
-    long teLen, caret;
-    Handle hText;
-    PenState savePen;
-    short saveFont, saveFace, saveSize, saveMode;
-    RgnHandle saveClip;
-    unsigned char bulletCh = 0xA5;      /* MacRoman bullet */
-    Boolean inFence = false;
-
-    view = (**te).viewRect;
-    nLines = (**te).nLines;
-    teLen = (**te).teLength;
-    hText = (**te).hText;
-    caret = (**te).selStart;
-    if (teLen == 0 || nLines == 0 || hText == NULL)
-        return;
-
-    saveClip = NewRgn();
-    if (saveClip == NULL)
-        return;
-    GetClip(saveClip);
-    if (!SectRect(&view, &(**saveClip).rgnBBox, &clipR))
-        clipR = view;
-    ClipRect(&clipR);
-
-    GetPenState(&savePen);
-    saveFont = qd.thePort->txFont;
-    saveFace = qd.thePort->txFace;
-    saveSize = qd.thePort->txSize;
     saveMode = qd.thePort->txMode;
     PenNormal();
-    /* The bullet glyph is drawn over an erased (white) cell, so force the
-       transparent text mode: srcOr leaves the cell's white background alone and
-       paints only the black glyph, whatever mode a prior TEUpdate left behind. */
-    TextMode(srcOr);
+    TextMode(srcOr);                   /* transparent, for the bullet glyph */
+    GrayStipple(&grayPat);
 
     HLock(hText);
     for (L = 0; L < nLines; L++) {
         long ls = (**te).lineStarts[L];
         long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
-        long contentLen;
+        Boolean paraStart = (Boolean) (ls == 0 || (*hText)[ls - 1] == '\r');
+        long contentLen = 0;
+        Boolean isRule = false, isList = false;
         MdListInfo info;
         Point base;
         TextStyle st;
         short lh, fa;
         FontInfo fi;
-        long markerStart;
-        short x0, baseline, w;
 
-        if (ls != 0 && (*hText)[ls - 1] != '\r')
-            continue;                         /* not a paragraph start */
-        contentLen = le - ls;
-        if (contentLen > 0 && (*hText)[le - 1] == '\r')
-            contentLen--;
-        /* Advance fence state at every paragraph start; a "- x" INSIDE a fenced
-           code sample is literal code, not a list item, so skip it. */
-        if (LineInCodeFence(hText, ls, contentLen, &inFence))
-            continue;
-        if (MdIsHorizontalRule((const char *) (*hText) + ls, contentLen))
-            continue;                         /* "- - -" is a rule, not a list */
-
-        info = MdParseListItem((const char *) (*hText) + ls, contentLen);
-        if (!info.isList || info.ordered)
-            continue;                         /* numbered markers stay literal */
-        if (revealActive && caret >= ls && caret <= ls + contentLen)
-            continue;                         /* editing this line: show markers */
+        /* Classify at each paragraph start; carry the fence/quote state across
+           this paragraph's wrapped continuation lines. */
+        if (paraStart) {
+            contentLen = le - ls;
+            if (contentLen > 0 && (*hText)[le - 1] == '\r')
+                contentLen--;
+            curInside = LineInCodeFence(hText, ls, contentLen, &inFence);
+            curDepth = curInside ? 0
+                     : MdBlockquoteDepth((const char *) (*hText) + ls, contentLen);
+            if (!curInside) {
+                if (MdIsHorizontalRule((const char *) (*hText) + ls, contentLen)) {
+                    isRule = true;
+                } else {
+                    info = MdParseListItem((const char *) (*hText) + ls, contentLen);
+                    isList = (Boolean) (info.isList && !info.ordered);
+                }
+            }
+        }
 
         base = TEGetPoint((short) ls, te);
         if (base.v < view.top - MAX_LINE_HEIGHT)
-            continue;
+            continue;                  /* wholly above the view */
         if (base.v - MAX_LINE_HEIGHT > view.bottom)
-            break;
+            break;                     /* this and every later line below */
 
         TEGetStyle((short) ls, &st, &lh, &fa, te);
         TextFont(st.tsFont);
@@ -2308,50 +1976,22 @@ void DrawListRuns(TEHandle te, Boolean revealActive)
         TextSize(st.tsSize);
         GetFontInfo(&fi);
 
-        markerStart = ls + info.indent;
-        base = TEGetPoint((short) markerStart, te);
-        x0 = base.h;
-        baseline = (short) (base.v - fi.descent);
-
-        if (info.checkbox) {
-            /* Erase the whole "- [ ] " marker span and draw a box in its place. */
-            Rect box;
-            short side, top;
-
-            w = TextWidth(*hText, (short) markerStart, (short) info.markerChars);
-            SetRect(&box, x0, (short) (base.v - fi.ascent - fi.descent),
-                    (short) (x0 + w), base.v);
-            EraseRect(&box);
-
-            side = (short) (fi.ascent - 2);
-            if (side < 6)
-                side = 6;
-            top = (short) (baseline - side);
-            SetRect(&box, x0, top, (short) (x0 + side), baseline);
-            ForeColor(blackColor);
-            PenSize(1, 1);
-            PenMode(patCopy);
-            FrameRect(&box);
-            if (info.checked) {
-                /* A simple X through the box. */
-                MoveTo(box.left, box.top);
-                LineTo((short) (box.right - 1), (short) (box.bottom - 1));
-                MoveTo((short) (box.right - 1), box.top);
-                LineTo(box.left, (short) (box.bottom - 1));
-            }
-        } else {
-            /* Bullet: erase just the marker character and draw a real bullet,
-               leaving the trailing space (and any nesting indent) in place. */
-            Rect cell;
-
-            w = TextWidth(*hText, (short) markerStart, 1);
-            SetRect(&cell, x0, (short) (base.v - fi.ascent - fi.descent),
-                    (short) (x0 + w), base.v);
-            EraseRect(&cell);
-            ForeColor(blackColor);
-            MoveTo(x0, baseline);
-            DrawChar((short) bulletCh);
+        /* Back-to-front: backgrounds, then block foreground, then strike lines. */
+        if (curInside)
+            ShadeCodeLine(te, base, &fi, &grayPat);
+        if (hasHigh)
+            PaintHighlightLine(te, ls, le, hText, &grayPat);
+        if (curDepth > 0)
+            PaintBlockquoteBars(base, &fi, view.left, curDepth);
+        if (paraStart && isRule) {
+            if (!(revealActive && caret >= ls && caret <= ls + contentLen))
+                PaintRule(te, base, &fi);
+        } else if (paraStart && isList) {
+            if (!(revealActive && caret >= ls && caret <= ls + contentLen))
+                PaintListMarker(te, ls, hText, &info, &st, &fi, bulletCh);
         }
+        if (hasStrike)
+            StrikeLineRuns(te, ls, le, hText);
     }
     HUnlock(hText);
 
@@ -2362,24 +2002,4 @@ void DrawListRuns(TEHandle te, Boolean revealActive)
     SetPenState(&savePen);
     SetClip(saveClip);
     DisposeRgn(saveClip);
-}
-
-/*
-    One entry point for all the Writer-view overpaints that TextEdit can't draw
-    itself. TextEdit lays the text (and native bold/italic/underline/heading/link
-    faces) down; then these passes add, in back-to-front order, the code-block and
-    highlight background stipples, the blockquote margin bars, the list markers,
-    the strike lines, and the horizontal rules. revealActive keeps the caret's own
-    line literal for the block features that would otherwise hide their editable
-    markers (rules and list bullets); the print path passes false so every block
-    renders. Only meaningful for gHiddenTE -- callers gate on gHideMarkdown.
-*/
-void DrawWriterOverlays(TEHandle te, Boolean revealActive)
-{
-    DrawCodeBlockRuns(te);
-    DrawHighlightRuns(te);
-    DrawBlockquoteRuns(te);
-    DrawListRuns(te, revealActive);
-    DrawStruckRuns(te);
-    DrawHrRuns(te, revealActive);
 }
