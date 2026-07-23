@@ -331,16 +331,13 @@ static void DoUpdate(WindowPtr w)
     BeginUpdate(w);
     EraseRect(&w->portRect);
     TEUpdate(&w->portRect, gActiveTE);
-    /* Strikethrough and highlight aren't native text faces, so TextEdit never
-       draws them; overpaint the highlight band and the strike line now that the
-       text is down (highlight first, so a struck line sits on top of its band).
-       Only in Writer mode: gActiveTE is gHiddenTE there, and gTE (Markdown mode)
-       never carries either flag, so this would be a no-op sweep otherwise. */
-    if (gHideMarkdown) {
-        DrawHighlightRuns(gActiveTE);
-        DrawStruckRuns(gActiveTE);
-        DrawHrRuns(gActiveTE, true);
-    }
+    /* Block/inline features TextEdit can't draw (code-block and highlight
+       backgrounds, blockquote bars, list markers, strike lines, horizontal
+       rules) are overpainted now that the text is down. Only in Writer mode:
+       gActiveTE is gHiddenTE there, and gTE (Markdown mode) shows raw text with
+       none of these, so this would be a no-op sweep otherwise. */
+    if (gHideMarkdown)
+        DrawWriterOverlays(gActiveTE, true);
     DrawControls(w);
     /* In windowed mode paint the grow box. Clip to the 15x15 corner so
        DrawGrowIcon draws only the size box, not its scrollbar-delimiter lines
@@ -661,14 +658,11 @@ static void EventLoop(void)
                         }
                         ScrollCaretIntoView();
                         UpdateScrollbarRange();
-                        /* TextEdit redrew the edited line(s) but not the strike
-                           line or highlight band; repaint both on the visible
-                           runs (highlight under the strike line). */
-                        if (gHideMarkdown) {
-                            DrawHighlightRuns(gActiveTE);
-                            DrawStruckRuns(gActiveTE);
-                            DrawHrRuns(gActiveTE, true);
-                        }
+                        /* TextEdit redrew the edited line(s) but not the block
+                           and non-face overlays; repaint them on the visible
+                           runs (see DrawWriterOverlays). */
+                        if (gHideMarkdown)
+                            DrawWriterOverlays(gActiveTE, true);
                     }
                     break;
                 }

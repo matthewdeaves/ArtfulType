@@ -11,22 +11,25 @@
 > Its conclusion: the tier splits by *round-trip risk* (does the feature hide
 > line-structure text?), not by block-vs-inline.
 >
-> **Phase 3, item 2 — `==highlight==` — is now implemented, reviewed, and
-> shipping.** It's inline and round-trip-safe, so it rides the proven span → run →
-> `MdStyleFields` pipeline (blue channel; `DrawHighlightRuns` `patOr` overdraw;
-> **Style ▸ Highlight**). The style-codec host test now covers all **64**
-> attribute combinations. **Remaining Phase 3 items are still deferred** because
-> they hide line structure (blockquote, fenced code, lists) or need a
-> non-colliding rule renderer (HR): they carry real round-trip risk and are best
-> validated one at a time on real System 6 hardware. Next unit of work, smallest
-> first: blockquote → fenced code → HR → lists/checkbox.
+> **Phase 3 is now COMPLETE (2026-07-23, cycle 3).** `==highlight==` and the
+> horizontal rule shipped earlier; **blockquote, fenced code block, and lists
+> (bullet/numbered/nested/checkbox) now ship too**, each as pure `mdcore` +
+> host tests (`tests/test_text.c`) + an adapter overpaint. Rather than hide line
+> structure (the round-trip risk that had them deferred), all three use the rule's
+> "detect by content, render by overdraw, keep the marker literal" pattern, so the
+> Writer buffer text stays equal to the canonical text and the round-trip is
+> lossless by construction — no per-block validation gauntlet needed. The six
+> Writer overpaints share one `DrawWriterOverlays` entry point. **Issue #9 (strike
+> line white) is fixed** here too. Details in
+> [ADR 0003 — "Block-level tier completed"](../adr/0003-content-features-from-darkcruix2.md).
+> **Every feature in this plan is implemented.**
 >
-> **Architecture follow-on (candidate C, 2026-07-23 review):** the `main.c`
-> `keyDown` arm is lengthening (doc-cap gating, `ScrollByKey`, `TEKey`,
-> `DetectInlineMarkdown`, `ExpandDateKeyword`, and — when lists land — Return
-> continuation). A future `HandleContentKey()` front door would give the
-> keystroke story one home. **Flagged, not scheduled**; revisit when list
-> Return-handling makes it a further concern.
+> **Architecture follow-on (candidate C):** the `main.c` `keyDown` arm (doc-cap
+> gating, `ScrollByKey`, `TEKey`, `DetectInlineMarkdown`, `ExpandDateKeyword`)
+> could gain a `HandleContentKey()` front door. Still **flagged, not scheduled** —
+> the block features landed as draw-time overlays with no new keystroke handling
+> (no list Return-continuation), so the arm did not grow this cycle; the draw-call
+> duplication that *was* growing is now resolved by `DrawWriterOverlays`.
 
 Implements [ADR 0003](../adr/0003-content-features-from-darkcruix2.md). Three
 tiers, quick-wins first, block-level Markdown last. Independent of the
@@ -121,12 +124,17 @@ compromise). Write the chosen model into ADR 0003 or a short spike note.
    `DrawStruckRuns` (but background, glyphs preserved). Host round-trip test now
    covers 64 combinations; live-typing (`MdDetectInline` for `=`) and a
    **Style ▸ Highlight** menu item included.
-3. **Fenced code block** (` ``` `) → multi-line Monaco run, fences hidden.
-4. **Blockquote `> `** (nestable) → space-indent + italic run, `> ` hidden;
-   optional left-bar overdraw.
-5. **Lists** — bullet (`- `/`* ` → `•`), numbered (`1. `), **nested** via leading
-   spaces, and **checkbox** (`- [ ]`/`- [x]`, rendered per the glyph compromise).
-   Largest; do last.
+3. **Fenced code block** (` ``` `/`~~~`) — ✅ **DONE (2026-07-23).** Detected by
+   content (`MdIsCodeFence`, host-tested); `DrawCodeBlockRuns` shades the fence
+   region with a `patOr` gray stipple. Fences stay literal (no Monaco restyle), so
+   the round-trip is lossless — the shade signals the block instead.
+4. **Blockquote `> `** (nestable) — ✅ **DONE (2026-07-23).** `MdBlockquoteDepth`
+   (host-tested) + `DrawBlockquoteRuns` draws one left-margin bar per level. `> `
+   stays literal (no hide/italic), keeping the round-trip lossless.
+5. **Lists** — ✅ **DONE (2026-07-23).** `MdParseListItem` (host-tested) +
+   `DrawListRuns`: bullet (`- `/`* `/`+ ` → drawn `•`), **checkbox** (`- [ ]`/`- [x]`
+   → drawn box, ticked when checked), **nested** via the literal leading-space
+   indent; numbered (`1. `) stays legibly literal. Markers stay literal (lossless).
 
 Each item extends `MdStrip` (hide delimiter, record span/attribute) and
 `MdEmitInline`/emit (restore canonical Markdown), then the adapter's

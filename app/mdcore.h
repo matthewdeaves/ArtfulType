@@ -300,4 +300,44 @@ long MdWordCount(const char *buf, long len);
 */
 int MdIsHorizontalRule(const char *line, long len);
 
+/*
+    Line-level block detectors (ADR 0003). Like MdIsHorizontalRule, these classify
+    a whole line by content so the Writer view can render it as a block WITHOUT
+    hiding or mutating the marker text -- the "detect by content, render by
+    overdraw" pattern that keeps the Writer<->Markdown round-trip lossless by
+    construction (the Writer buffer text stays equal to the canonical text; only
+    the drawing changes). All pure: buffers only, no Toolbox.
+
+    MdBlockquoteDepth returns the blockquote nesting depth of line[0..len): the
+    number of leading '>' markers (each optionally followed by a space, up to three
+    leading spaces before the first), or 0 if the line is not a blockquote.
+
+    MdIsCodeFence reports whether line[0..len) opens or closes a fenced code block:
+    three or more '`' or '~' (a single marker char), up to three leading spaces, and
+    -- for a backtick fence -- no '`' in any trailing info string. Returns 1/0.
+*/
+int MdBlockquoteDepth(const char *line, long len);
+int MdIsCodeFence(const char *line, long len);
+
+/*
+    A parsed list-item marker (bullet, numbered, or task checkbox). isList is 0
+    when line[0..len) is not a list item, in which case the other fields are 0.
+    indent is the count of leading spaces/tabs (the nesting cue, since classic
+    TextEdit has no paragraph indent); markerChars is how many characters after
+    that indent make up the marker itself (e.g. "- " => 2, "1. " => 3,
+    "- [ ] " => 6), so the content begins at indent + markerChars. ordered is 1
+    for a numbered marker ("1." / "1)"); checkbox is 1 for a GitHub task marker
+    and checked is 1 when it is "[x]"/"[X]". Pure.
+*/
+typedef struct {
+    int isList;
+    int indent;
+    int markerChars;
+    int ordered;
+    int checkbox;
+    int checked;
+} MdListInfo;
+
+MdListInfo MdParseListItem(const char *line, long len);
+
 #endif /* MDCORE_H */

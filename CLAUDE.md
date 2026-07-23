@@ -68,13 +68,22 @@ run per character range, and `ApplySpanStyles` applies a single combined
 `TextStyle` per run — that one combined write is what lets bold+strike+link
 coexist without a later span clobbering an earlier face.
 
-A **horizontal rule** (a paragraph of only `---`/`***`/`___`) is the exception
-to the style-run model: it carries no style flag at all. `DrawHrRuns` detects
-such lines by content (pure `MdIsHorizontalRule`) at draw time and overpaints a
-drawn rule — the marker text is never modified, so the Markdown round-trips
-untouched and no colour channel is spent. The caret's own line is left as literal
-markers so it stays editable. This is the model for future *line-level* block
-features now that the three colour channels are full.
+**Line-level block features** are the exception to the style-run model: they carry
+no style flag at all. The adapter detects each block by *content* at draw time (via
+a pure `mdcore` predicate) and overpaints — the marker text is never modified, so
+the Markdown round-trips untouched and no colour channel is spent (all three are
+full). This is the sanctioned pattern now that the colour space is exhausted, and
+every line-level block uses it: **horizontal rule** (`---`/`***`/`___` → `DrawHrRuns`,
+pure `MdIsHorizontalRule`), **blockquote** (`> ` → `DrawBlockquoteRuns` margin bars,
+`MdBlockquoteDepth`, nestable), **fenced code block** (```` ``` ````/`~~~` →
+`DrawCodeBlockRuns` gray stipple across the fenced region, `MdIsCodeFence`), and
+**lists** (`- `/`* `/`+ ` bullets → a drawn `•`, and `- [ ]`/`- [x]` task boxes →
+`DrawListRuns`, `MdParseListItem`; numbered `1. ` stays literal). All six Writer
+overpaints (these plus strike and highlight) run through one `DrawWriterOverlays`
+entry point. For blocks whose markers would otherwise be hidden, the caret's own
+line is left literal so it stays editable (the `revealActive` flag). Because the
+Writer buffer text always equals the canonical text for these lines, the round-trip
+is lossless by construction.
 
 The pure engine `mdcore` (`app/mdcore.{c,h}`) does strip / emit / span→run
 flatten / live-detect on plain buffers; `markdown.c` is the thin Mac adapter

@@ -331,6 +331,10 @@ void DoStyleCommand(short menuItem);
 void DrawStruckRuns(TEHandle te);
 void DrawHighlightRuns(TEHandle te);
 void DrawHrRuns(TEHandle te, Boolean revealActive);
+void DrawBlockquoteRuns(TEHandle te);
+void DrawCodeBlockRuns(TEHandle te);
+void DrawListRuns(TEHandle te, Boolean revealActive);
+void DrawWriterOverlays(TEHandle te, Boolean revealActive);
 void ClearSelectionStyleHidden(void);
 void ClearMarkdownInSelection(void);
 
