@@ -103,6 +103,10 @@ static void DoReplaceAll(void)
     }
 
     NumToString(count, num);
+    /* msg is the OUTPUT of PStrCopy (dst), written via BlockMove then read by
+       PStrCat below; some cppcheck versions can't see the write through
+       BlockMove and flag a false uninitvar. */
+    /* cppcheck-suppress uninitvar ; msg is written by PStrCopy, not read */
     PStrCopy(msg, num);
     PStrCat(msg, "\p occurrence(s) replaced.");
     ParamText(msg, "\p", "\p", "\p");
@@ -207,6 +211,7 @@ void DoWordCount(void)
     HUnlock(htext);
 
     NumToString(words, num);
+    /* cppcheck-suppress uninitvar ; msg is written by PStrCopy, not read */
     PStrCopy(msg, num);
     PStrCat(msg, "\p words, ");
     NumToString(len, num);
