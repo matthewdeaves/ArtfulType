@@ -19,7 +19,7 @@ static const unsigned char kSplashImageBits[kSplashImageHeight * kSplashImageRow
 };
 
 /* Bump this on every release. */
-static const unsigned char kVersionString[] = "\pv1.0.0";
+static const unsigned char kVersionString[] = "\pv1.1.0";
 /* This is Matthew Deaves' fork; the URL points at the fork, the line above it
    attributes the original to Action Retro (Sean Malseed). */
 static const unsigned char kForkString[] = "\pMatthew Deaves' fork of Action Retro's ArtfulType";

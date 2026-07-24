@@ -308,5 +308,5 @@ resource 'BNDL' (128) {
    the compact-Mac targets. Conventionally the human-readable version string. */
 type 'ArtT' as 'STR ';
 resource 'ArtT' (0, purgeable) {
-    "ArtfulType 1.0.0"
+    "ArtfulType 1.1.0"
 };
