@@ -304,7 +304,8 @@ void SetWindowMode(short newMode);
 /* scrolling.c */
 void UpdateScrollbarRange(void);
 void AdjustScrollbar(void);
-void ScrollCaretIntoView(void);
+Boolean ScrollCaretIntoView(void);
+void RepaintWriterViewForced(void);
 void DoScrollClick(Point pt);
 void InvalidateHeightCache(void);
 Boolean ScrollByKey(unsigned char key);
@@ -329,6 +330,9 @@ void ToggleHeadingHidden(short level);
 void DetectInlineMarkdown(char justTyped);
 void DoStyleCommand(short menuItem);
 void DrawWriterOverlays(TEHandle te, Boolean revealActive);
+Boolean WriterHasStippleBackground(void);
+Boolean CodeFencesBalanced(void);
+void RerenderWriterView(void);
 void ClearSelectionStyleHidden(void);
 void ClearMarkdownInSelection(void);
 

@@ -161,6 +161,16 @@ static void SetHighlightFlag(TextStyle *ts, short on)
    sweep. */
 static Boolean gDocHasHighlight = false;
 
+/* Highlight is now the only patOr stipple background (code blocks render as a
+   Monaco span, not a gray field). It tells the scroll path whether a stipple is
+   on screen -- the only overlay that darkens if re-OR'd over a block-copied
+   scroll (see RepaintWriterViewClean in scrolling.c); a stipple-free view takes
+   the cheap idempotent repaint with no erase/flash. */
+Boolean WriterHasStippleBackground(void)
+{
+    return gDocHasHighlight;
+}
+
 /*
     Sets (on != 0) or clears the highlight flag over te[from,to), preserving each
     run's link ID (red) and strike flag (green). Because TESetStyle writes the
@@ -653,6 +663,74 @@ void BuildHiddenView(void)
 }
 
 /*
+    Counts the literal ``` fence-marker lines in the Writer buffer and reports
+    whether they are balanced -- a non-zero, even count, i.e. every opening fence
+    has a matching close. A completed fence can then be re-rendered into a Monaco
+    code span; a half-typed one (odd count) is left literal until it is closed.
+    Cheap: one line walk, only called on a backtick keystroke.
+*/
+Boolean CodeFencesBalanced(void)
+{
+    Handle h;
+    long len, ls;
+    int count = 0;
+
+    if (gHiddenTE == NULL)
+        return false;
+    h = (**gHiddenTE).hText;
+    len = (**gHiddenTE).teLength;
+
+    HLock(h);
+    ls = 0;
+    while (ls < len) {
+        long le = ls;
+        while (le < len && (*h)[le] != '\r')
+            le++;
+        if (MdIsCodeFence((const char *) (*h) + ls, le - ls))
+            count++;
+        ls = le + 1;
+    }
+    HUnlock(h);
+    return (Boolean) (count > 0 && (count & 1) == 0);
+}
+
+/*
+    Re-render the Writer view the way a Markdown<->Writer toggle does, but in
+    place: emit the current styled text back to canonical Markdown, then re-strip
+    it. This is what turns a just-closed ``` fence into a clean Monaco code span
+    (markers HIDDEN, like every other style) live, instead of leaving the literal
+    backticks on screen -- the same result a manual mode toggle produces.
+
+    BuildHiddenView parks the caret at 0; the only text that changed is the fence's
+    markers, all before the caret (it was just typed at the block's end), so the
+    caret is shifted back by exactly the number of characters the re-strip removed.
+    Writer mode only.
+*/
+void RerenderWriterView(void)
+{
+    long oldLen, oldCaret, newLen, newCaret;
+
+    if (!gHideMarkdown)
+        return;
+
+    oldLen = (**gHiddenTE).teLength;
+    oldCaret = (**gHiddenTE).selStart;
+
+    SyncHiddenToCanonical();       /* Writer text -> canonical Markdown in gTE */
+    BuildHiddenView();             /* re-strip: ``` fence -> Monaco, markers gone */
+
+    newLen = (**gHiddenTE).teLength;
+    newCaret = oldCaret - (oldLen - newLen);
+    if (newCaret < 0) newCaret = 0;
+    if (newCaret > newLen) newCaret = newLen;
+    TESetSelect((short) newCaret, (short) newCaret, gHiddenTE);
+
+    /* The line structure changed under the rebuild; the caret/height caches key
+       off line numbers, so a following ScrollCaretIntoView must recompute. */
+    InvalidateHeightCache();
+}
+
+/*
     Reverse direction: walks gHiddenTE's text + style runs and re-derives
     markdown delimiters, rebuilding gTE's canonical text from scratch.
     Headings are detected per-line (bold + a heading-sized run at the
@@ -689,6 +767,8 @@ static short BuildStyleRuns(TEHandle te, long from, long to, short monacoFont,
         sf.strike = GetStrikeFlag(&st);
         sf.highlight = GetHighlightFlag(&st);
         MdFieldsToRun(&sf, &cur);
+        cur.heading = 0;   /* inline-only path (selection copy); MdEmitInline
+                              ignores heading, but don't leave it uninitialised */
 
         /* Coalesce on the six style booleans only -- NOT linkID: a run keeps
            the link ID of its first character, matching the old emit loop (which
@@ -724,6 +804,55 @@ static void SnapshotLinkTable(void)
         BlockMove(gLinkURLs[li], gEmitLinks.url[li], gLinkURLs[li][0] + 1);
 }
 
+/* Coalesces gHiddenTE's per-character styles into the WHOLE-DOCUMENT run list
+   MdEmit consumes: contiguous runs over [0, len), each carrying the six inline
+   attributes plus a heading level (bold + a heading-sized run => heading). This
+   is the fast, O(len) inverse of ApplySpanStyles -- one TEGetStyle per character,
+   no per-line re-scan. Plain text (and a code block's Monaco body, '\r' and all)
+   coalesces across line breaks, so a code run that spans a '\r' is a fenced block
+   and a large plain document stays a handful of runs; MdEmit clamps runs to each
+   line as it walks. Runs break on the six attributes AND the heading level, so a
+   heading line is never merged into surrounding text. Returns the run count;
+   folds any overflow past `cap` into the last run (unreachable in practice --
+   run count is bounded by style changes, itself bounded by MD_MAX_SPANS). */
+static short BuildDocRuns(TEHandle te, long len, short monacoFont,
+                          MdRun *runs, short cap)
+{
+    short n = 0;
+    long i;
+
+    for (i = 0; i < len; i++) {
+        TextStyle st;
+        short lh, fa;
+        MdStyleFields sf;
+        MdRun cur;
+
+        TEGetStyle((short) i, &st, &lh, &fa, te);
+        sf.face = MdFaceFromToolbox(st.tsFace);
+        sf.code = (st.tsFont == monacoFont);
+        sf.linkID = GetLinkID(&st);
+        sf.strike = GetStrikeFlag(&st);
+        sf.highlight = GetHighlightFlag(&st);
+        MdFieldsToRun(&sf, &cur);
+        cur.heading = GetHeadingLevel(&st);
+
+        if (n > 0 && runs[n - 1].bold == cur.bold && runs[n - 1].italic == cur.italic &&
+            runs[n - 1].code == cur.code && runs[n - 1].link == cur.link &&
+            runs[n - 1].strike == cur.strike && runs[n - 1].highlight == cur.highlight &&
+            runs[n - 1].heading == cur.heading) {
+            runs[n - 1].end = i + 1;
+        } else if (n < cap) {
+            cur.start = i;
+            cur.end = i + 1;
+            runs[n] = cur;
+            n++;
+        } else {
+            runs[n - 1].end = i + 1;
+        }
+    }
+    return n;
+}
+
 void SyncHiddenToCanonical(void)
 {
     Handle srcH;
@@ -731,8 +860,8 @@ void SyncHiddenToCanonical(void)
     Handle outH;
     long outCap;
     long outLen;
-    long lineStart;
     short monacoFont;
+    short nRuns;
     Rect savedViewRect;
     long urlSpace;
     short li;
@@ -749,59 +878,27 @@ void SyncHiddenToCanonical(void)
     urlSpace = 0;
     for (li = 1; li <= gLinkCount; li++)
         urlSpace += gLinkURLs[li][0];
-    outCap = len * 2 + 64 + urlSpace;
+    /* x5 headroom. MdEmit self-bounds every write (see MdEmit / MdEmitInline),
+       so this size is a fast-path convenience, not a safety guarantee: the
+       tightest case is a fenced block whose whole body is one blank line -- a
+       lone Monaco '\r', 2 input chars re-fenced to ```\r\r```\r, 10 output, 5x.
+       Output per block = body + 9 <= 5*(body + 1) for body >= 1, so len*5 + 64
+       covers it; MdEmit truncates rather than overrun if ever exceeded. Bounded
+       (docs are <= 20 KB). */
+    outCap = len * 5 + 64 + urlSpace;
     outH = NewHandle(outCap);
     if (outH == NULL) {
         InitCursor();
         return;
     }
-    outLen = 0;
 
     monacoFont = MonacoFont();
     SnapshotLinkTable();
+    nRuns = BuildDocRuns(gHiddenTE, len, monacoFont, gEmitRuns, MD_MAX_RUNS);
 
     HLock(srcH);
     HLock(outH);
-
-    lineStart = 0;
-    while (lineStart <= len) {
-        long lineEnd = lineStart;
-        short headingLevel = 0;
-        Boolean isHeading = false;
-
-        while (lineEnd < len && (*srcH)[lineEnd] != '\r')
-            lineEnd++;
-
-        if (lineEnd > lineStart) {
-            TextStyle firstStyle;
-            short dummyLH, dummyFA;
-
-            TEGetStyle((short) lineStart, &firstStyle, &dummyLH, &dummyFA, gHiddenTE);
-            headingLevel = GetHeadingLevel(&firstStyle);
-            isHeading = (headingLevel > 0);
-        }
-
-        if (isHeading) {
-            short k;
-
-            for (k = 0; k < headingLevel; k++)
-                (*outH)[outLen++] = '#';
-            (*outH)[outLen++] = ' ';
-            BlockMove(*srcH + lineStart, *outH + outLen, lineEnd - lineStart);
-            outLen += (lineEnd - lineStart);
-        } else {
-            short runCount = BuildStyleRuns(gHiddenTE, lineStart, lineEnd,
-                                            monacoFont, gEmitRuns, MD_MAX_RUNS);
-            outLen += MdEmitInline(*srcH + lineStart, lineEnd - lineStart,
-                                   gEmitRuns, runCount, &gEmitLinks,
-                                   *outH + outLen, outCap - outLen);
-        }
-
-        if (lineEnd < len)
-            (*outH)[outLen++] = '\r';
-        lineStart = lineEnd + 1;
-    }
-
+    outLen = MdEmit(*srcH, len, gEmitRuns, nRuns, &gEmitLinks, *outH, outCap);
     HUnlock(srcH);
 
     SuppressDrawing(gTE, &savedViewRect);
@@ -1640,28 +1737,6 @@ static void GrayStipple(Pattern *p)
     p->pat[6] = 0x88; p->pat[7] = 0x22;
 }
 
-/* Code block: a patOr gray band across the whole text column for one line, so a
-   fenced block reads as a distinct field. patOr leaves the black glyphs alone so
-   the code stays legible. The hilite bit is re-asserted so a colour device
-   doesn't remap the fill to the highlight colour. */
-static void ShadeCodeLine(TEHandle te, Point base, const FontInfo *fi,
-                          const Pattern *gray)
-{
-    Rect band;
-
-    band.left = (**te).destRect.left;
-    band.right = (**te).destRect.right;
-    band.bottom = base.v;
-    band.top = (short) (base.v - fi->ascent - fi->descent);
-    LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
-    ForeColor(blackColor);
-    BackColor(whiteColor);
-    PenPat(gray);
-    PenMode(patOr);
-    PaintRect(&band);
-    PenNormal();                /* leave a clean black pen for later strokes */
-}
-
 /* Highlight (==mark==): a patOr gray band behind each highlighted run (tsColor.blue
    == 1) within one line [ls, le), measured per maximal same-font/face/size segment
    so TextWidth is exact. The blue-channel twin of the strike pass; gDocHasHighlight
@@ -1999,13 +2074,13 @@ void DrawWriterOverlays(TEHandle te, Boolean revealActive)
         TextSize(st.tsSize);
         GetFontInfo(&fi);
 
-        /* Back-to-front: backgrounds, then block foreground, then strike lines.
-           Like the rule and list markers, the code-block shade reveals the
-           caret's own line so a fence marker you are still typing (a lone "~~~"
-           or "```") stays literal and editable instead of flashing shaded. */
-        if (curInside &&
-            !(revealActive && caret >= ls && caret <= le))
-            ShadeCodeLine(te, base, &fi, &grayPat);
+        /* Back-to-front: highlight background, then block foreground, then strike
+           lines. Code blocks are NOT shaded here any more -- a completed ``` fence
+           is re-rendered into a Monaco code span (markers hidden) the moment it
+           closes, exactly like a Markdown<->Writer toggle does (see
+           RerenderWriterView). curInside is still tracked only so a rule / list /
+           blockquote marker inside a not-yet-closed fence (still literal while you
+           type it) isn't decorated as real Markdown. */
         if (hasHigh)
             PaintHighlightLine(te, ls, le, hText, &grayPat);
         if (curDepth > 0)

@@ -30,13 +30,51 @@ static void SyncScrollbarToOffset(void)
     overlays (strike lines, highlight/code-block backgrounds, blockquote bars, list
     markers, rules -- see DrawWriterOverlays), and unlike a content click it posts
     no update event, so every scroll path must repaint them itself. A no-op outside
-    Writer mode (gTE carries none of these). Mirrors what the keystroke path in
-    main.c already does after its own ScrollCaretIntoView.
+    Writer mode (gTE carries none of these).
+
+    The subtlety: TEScroll uses ScrollRect, which block-COPIES the visible pixels
+    -- including the patOr code-block/highlight stipple -- to their new position.
+    Re-running DrawWriterOverlays would then OR fresh stipple on top of that copy
+    at a different 8x8 pattern phase (the scroll delta is rarely a multiple of 8),
+    so the gray only ever gets darker and never clears. When such a stipple
+    background is on screen, erase and re-lay the visible text first, then paint
+    each overlay exactly once on a clean field -- the same order DoUpdate uses.
+    The strike/rule/list/blockquote overlays are solid draws and idempotent, so a
+    stipple-free view takes the cheap repaint with no erase (and no flicker).
 */
-static void RepaintStrikeAfterScroll(void)
+/* Erase the text view and re-lay it from scratch, then paint the overlays once
+   -- the same clean order DoUpdate and a mode switch use. Needed when an edit
+   RE-CLASSIFIES lines (e.g. typing/deleting a ``` fence opens or closes a code
+   block, so whole regions must change or lose their shade): the incremental
+   overlay walk can only ADD patOr shading, never erase it, so it can't undo a
+   region that is no longer inside a fence. Writer mode only. */
+void RepaintWriterViewForced(void)
 {
-    if (gHideMarkdown)
+    Rect view;
+
+    if (!gHideMarkdown)
+        return;
+
+    view = (**gActiveTE).viewRect;
+    ForeColor(blackColor);
+    BackColor(whiteColor);
+    EraseRect(&view);
+    TEUpdate(&view, gActiveTE);
+    DrawWriterOverlays(gActiveTE, true);
+}
+
+static void RepaintWriterViewClean(void)
+{
+    if (!gHideMarkdown)
+        return;
+
+    /* A scroll only moves existing lines; if no patOr stipple is on screen the
+       cheap idempotent repaint suffices (and avoids an erase/flicker). */
+    if (!WriterHasStippleBackground()) {
         DrawWriterOverlays(gActiveTE, true);
+        return;
+    }
+    RepaintWriterViewForced();
 }
 
 /*
@@ -138,7 +176,7 @@ void AdjustScrollbar(void)
     /* The clamp above can TEScroll; most callers InvalRect afterward, but not
        all (zoom, save), so repaint the strike overpaint here too. Harmless
        when nothing scrolled (early-out on no strike). */
-    RepaintStrikeAfterScroll();
+    RepaintWriterViewClean();
 }
 
 /* lineStarts[] is sorted, so the line containing pos is found with a
@@ -160,12 +198,13 @@ static short LineContaining(TEHandle te, short pos)
     return low;
 }
 
-void ScrollCaretIntoView(void)
+Boolean ScrollCaretIntoView(void)
 {
     short caretLine;
     long heightToLine, heightToLineNext;
     short lineTop, lineBottom;
     short viewTop, viewBottom;
+    Boolean scrolled = false;
 
     caretLine = LineContaining(gActiveTE, (**gActiveTE).selEnd);
 
@@ -198,12 +237,24 @@ void ScrollCaretIntoView(void)
     viewTop = (**gActiveTE).viewRect.top;
     viewBottom = (**gActiveTE).viewRect.bottom;
 
-    if (lineBottom > viewBottom)
+    if (lineBottom > viewBottom) {
         TEScroll(0, viewBottom - lineBottom, gActiveTE);
-    else if (lineTop < viewTop)
+        scrolled = true;
+    } else if (lineTop < viewTop) {
         TEScroll(0, viewTop - lineTop, gActiveTE);
+        scrolled = true;
+    }
 
     SyncScrollbarToOffset();
+
+    /* A scroll block-copied any on-screen stipple; re-lay the view so the
+       overlay repaint doesn't stack the gray darker (see RepaintWriterViewClean).
+       Callers that skip their own overlay repaint when this returns true rely on
+       this having repainted. */
+    if (scrolled)
+        RepaintWriterViewClean();
+
+    return scrolled;
 }
 
 /*
@@ -231,7 +282,7 @@ Boolean ScrollByKey(unsigned char key)
     if (desired > max) desired = max;
     TEScroll(0, cur - desired, gActiveTE);
     SyncScrollbarToOffset();
-    RepaintStrikeAfterScroll();
+    RepaintWriterViewClean();
     return true;
 }
 
@@ -260,7 +311,7 @@ static pascal void ScrollAction(ControlHandle control, short part)
 
     TEScroll(0, CurrentScrollOffset(gActiveTE) - desired, gActiveTE);
     SetControlValue(control, CurrentScrollOffset(gActiveTE));
-    RepaintStrikeAfterScroll();
+    RepaintWriterViewClean();
 }
 
 void DoScrollClick(Point pt)
@@ -278,7 +329,7 @@ void DoScrollClick(Point pt)
         desired = GetControlValue(gScrollBar);
         TEScroll(0, CurrentScrollOffset(gActiveTE) - desired, gActiveTE);
         SyncScrollbarToOffset();
-        RepaintStrikeAfterScroll();
+        RepaintWriterViewClean();
     } else {
         /* ScrollAction repaints on every tick as it scrolls; nothing to add
            here (the arrows/page regions live-scroll through that proc). */

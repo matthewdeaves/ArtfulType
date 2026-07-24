@@ -665,13 +665,34 @@ static void EventLoop(void)
                                 DetectInlineMarkdown(key);
                             ExpandDateKeyword(key);
                         }
-                        ScrollCaretIntoView();
-                        UpdateScrollbarRange();
-                        /* TextEdit redrew the edited line(s) but not the block
-                           and non-face overlays; repaint them on the visible
-                           runs (see DrawWriterOverlays). */
-                        if (gHideMarkdown)
-                            DrawWriterOverlays(gActiveTE, true);
+                        {
+                            /* TextEdit redrew the edited line(s) but not the
+                               block and non-face overlays; repaint them on the
+                               visible runs (see DrawWriterOverlays). When the
+                               caret scrolls, ScrollCaretIntoView re-lays the view
+                               and repaints the overlays cleanly itself (a scroll
+                               block-copies the stipple, which must not be
+                               re-OR'd), so only repaint here when it did not. */
+                            Boolean scrolled;
+                            /* Typing the closing ``` of a fence: re-render it
+                               into a clean Monaco code span the moment it
+                               balances (markers stripped), exactly like a
+                               Markdown<->Writer toggle does -- otherwise the
+                               block only renders right after a manual toggle. */
+                            if (gHideMarkdown && key == '`' && CodeFencesBalanced())
+                                RerenderWriterView();
+                            scrolled = ScrollCaretIntoView();
+                            UpdateScrollbarRange();
+                            if (gHideMarkdown) {
+                                /* A backtick changes fence classification for a
+                                   whole region, so re-lay the view cleanly rather
+                                   than incrementally patOr-ing over it. */
+                                if (key == '`')
+                                    RepaintWriterViewForced();
+                                else if (!scrolled)
+                                    DrawWriterOverlays(gActiveTE, true);
+                            }
+                        }
                     }
                     break;
                 }
