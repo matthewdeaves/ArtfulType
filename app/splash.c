@@ -19,8 +19,11 @@ static const unsigned char kSplashImageBits[kSplashImageHeight * kSplashImageRow
 };
 
 /* Bump this on every release. */
-static const unsigned char kVersionString[] = "\pv0.5.4-alpha";
-static const unsigned char kGitHubURL[] = "\pgithub.com/ActionRetro";
+static const unsigned char kVersionString[] = "\pv1.0.0";
+/* This is Matthew Deaves' fork; the URL points at the fork, the line above it
+   attributes the original to Action Retro (Sean Malseed). */
+static const unsigned char kForkString[] = "\pMatthew Deaves' fork of Action Retro's ArtfulType";
+static const unsigned char kGitHubURL[] = "\pgithub.com/matthewdeaves/ArtfulType";
 
 static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
 {
@@ -64,10 +67,15 @@ static pascal void DrawSplashTitle(DialogPtr dlg, short itemNo)
     MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 158);
     DrawString(s);
 
+    BlockMove(kForkString, s, kForkString[0] + 1);
+    textWidth = StringWidth(s);
+    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 170);
+    DrawString(s);
+
     TextFace(bold);
     BlockMove(kGitHubURL, s, kGitHubURL[0] + 1);
     textWidth = StringWidth(s);
-    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 172);
+    MoveTo(box.left + (box.right - box.left - textWidth) / 2, box.top + 182);
     DrawString(s);
     TextFace(normal);
 }

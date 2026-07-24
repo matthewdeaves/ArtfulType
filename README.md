@@ -15,7 +15,7 @@ One document, two views toggled from the View menu — **Writer** (Markdown rend
 - **Live styling** — bold, italic, `code`, headings, links, **strikethrough**, and **`==highlight==`**, as you type or from the Style menu ★
 - **Block Markdown** — horizontal rules (`---`/`***`/`___`), blockquotes (`> `, nestable), fenced code blocks (```` ``` ````/`~~~`), and lists — bullets (`- `/`* `/`+ ` → •), numbered (`1. `), nested, and task checkboxes (`- [ ]`/`- [x]`) — all rendered live in Writer mode, all round-tripping to clean Markdown ★
 - **Styles nest and combine** — a struck bold word, a bold link, a highlighted phrase, `***bold italic***` — round-tripping losslessly between Writer and Markdown ★
-- **Print** — Page Setup and Print through the classic Printing Manager, on System 6 and System 7 ★
+- **Print** — Page Setup and Print through the classic Printing Manager — the formatted Writer view or the raw Markdown source — on System 6 and System 7, both tested on a real LaserWriter ★
 - **Links** — type `[text](url)` inline, or select text → Style → Link
 - **Full-screen or windowed** — stay in the distraction-free full-screen page, or switch to a real resizable, draggable window from the View menu ★
 - **A real Preferences dialog** — set the default window mode, view, body font, and zoom; remembered between launches on **both System 6 and 7** ★
