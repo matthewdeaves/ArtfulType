@@ -37,6 +37,16 @@
 > (a `HandleContentKey()` front door for the `main.c keyDown` arm) stays flagged,
 > not scheduled — the block features added no keystroke logic, so the arm did not
 > grow.
+>
+> **Static-analysis follow-up (v0.5.2-alpha):** `lizard` flagged the live-typing
+> detector `MdDetectInline` as the codebase's complexity peak (CCN 77). It is now
+> decomposed into one small `DetectXxx` helper per delimiter (`DetectHeading`,
+> `DetectPairDelim` — shared by **bold**/~~strike~~/==highlight== since all three
+> are structurally identical two-char pairs — `DetectItalic`, `DetectCode`,
+> `DetectLink`); `MdDetectInline` is now just the line-bounds scan plus a dispatch
+> on the typed character. Peak CCN drops 77 → 14, no function in `mdcore.c` exceeds
+> lizard's threshold, and all 161 `test_mddetect` checks (plus the 1046-check host
+> suite) still pass — behaviour is identical, verified by the tests.
 
 Implements [ADR 0003](../adr/0003-content-features-from-darkcruix2.md). Three
 tiers, quick-wins first, block-level Markdown last. Independent of the

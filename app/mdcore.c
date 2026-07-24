@@ -491,6 +491,213 @@ long MdEmitInline(const char *src, long len,
 #undef PUT
 }
 
+/*
+    Each of the following DetectXxx helpers owns one delimiter's live-typing
+    rule. They read the buffer, and on a match fill *e with the edit plan and
+    return 1; on no match they return 0 and leave *e untouched (the caller has
+    already parked MD_INLINE_NONE there). MdDetectInline is then just the
+    line-bounds scan plus a dispatch on the character just typed. Splitting the
+    old one big switch this way keeps each rule small and individually testable
+    (the host suite drives them all through MdDetectInline).
+*/
+
+/* Leading "# " through "### " at the line start (justTyped == ' '). */
+static int DetectHeading(const char *buf, long caret, long lineStart,
+                         MdInlineEdit *e)
+{
+    short level = 0;
+    long p = lineStart;
+
+    while (level < 3 && p < caret - 1 && buf[p] == '#') {
+        level++;
+        p++;
+    }
+    if (level > 0 && p == caret - 1) {
+        /* delete the prefix and the space, then leave a bold, larger typing
+           style in place so the heading is typed live. No del2, no reset. */
+        e->kind = MD_KIND_HEADING;
+        e->level = level;
+        e->del1Start = lineStart;
+        e->del1End = caret;
+        e->styleStart = e->styleEnd = lineStart;
+        e->newCaret = lineStart;
+        e->resetNormal = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/*
+    A two-character paired delimiter -- **bold**, ~~strike~~, ==highlight==.
+    All three share this exact shape, differing only in the delimiter byte d
+    and the MD_KIND_* to record. Called when justTyped is that byte; self-gates
+    on the just-completed "dd" so it is safe to call unconditionally.
+*/
+static int DetectPairDelim(const char *buf, long caret, long lineStart,
+                           long lineEnd, char d, short kind, MdInlineEdit *e)
+{
+    long p, q;
+
+    if (!(caret >= 4 && buf[caret - 2] == d && buf[caret - 1] == d))
+        return 0;
+
+    /* An opening "dd" behind the caret => the pair just closed. */
+    for (p = caret - 4; p >= lineStart; p--) {
+        if (buf[p] == d && buf[p + 1] == d && p + 2 < caret - 2) {
+            long innerEnd = caret - 2;
+
+            e->kind = kind;
+            e->del1Start = innerEnd; e->del1End = caret;
+            e->del2Start = p;        e->del2End = p + 2;
+            e->styleStart = p;       e->styleEnd = innerEnd - 2;
+            e->newCaret = innerEnd - 2;
+            e->resetNormal = 1;
+            return 1;
+        }
+    }
+
+    /* No opening "dd" behind the caret -- the just-typed "dd" may instead be
+       an OPENING delimiter for a closing "dd" already later in the line
+       (typed closing-first). */
+    for (q = caret + 1; q + 1 < lineEnd; q++) {
+        if (buf[q] == d && buf[q + 1] == d) {
+            long innerEnd = q;
+
+            e->kind = kind;
+            e->del1Start = innerEnd;  e->del1End = innerEnd + 2;
+            e->del2Start = caret - 2; e->del2End = caret;
+            e->styleStart = caret - 2; e->styleEnd = innerEnd - 2;
+            e->newCaret = caret - 2;
+            e->resetNormal = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* *italic* -- single '*' that is not part of a '**' run (justTyped == '*'). */
+static int DetectItalic(const char *buf, long caret, long lineStart,
+                        long lineEnd, MdInlineEdit *e)
+{
+    long p, q;
+
+    for (p = caret - 2; p >= lineStart; p--) {
+        if (buf[p] == '*' &&
+            (p == lineStart || buf[p - 1] != '*') &&
+            buf[p + 1] != '*' && p + 1 < caret - 1) {
+            long innerEnd = caret - 1;
+
+            e->kind = MD_KIND_ITALIC;
+            e->del1Start = innerEnd; e->del1End = caret;
+            e->del2Start = p;        e->del2End = p + 1;
+            e->styleStart = p;       e->styleEnd = innerEnd - 1;
+            e->newCaret = innerEnd - 1;
+            e->resetNormal = 1;
+            return 1;
+        }
+    }
+
+    /* No opening '*' behind the caret -- the just-typed '*' may instead be an
+       OPENING italic delimiter for a closing '*' already later in the line. */
+    for (q = caret; q < lineEnd; q++) {
+        if (buf[q] == '*' &&
+            buf[q - 1] != '*' &&
+            (q + 1 == lineEnd || buf[q + 1] != '*') &&
+            q > caret) {
+            long innerEnd = q;
+
+            e->kind = MD_KIND_ITALIC;
+            e->del1Start = innerEnd;  e->del1End = innerEnd + 1;
+            e->del2Start = caret - 1; e->del2End = caret;
+            e->styleStart = caret - 1; e->styleEnd = innerEnd - 1;
+            e->newCaret = caret - 1;
+            e->resetNormal = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* `code` -- single '`' delimiter (justTyped == '`'). */
+static int DetectCode(const char *buf, long caret, long lineStart,
+                      long lineEnd, MdInlineEdit *e)
+{
+    long p, q;
+
+    for (p = caret - 2; p >= lineStart; p--) {
+        if (buf[p] == '`' && p + 1 < caret - 1) {
+            long innerEnd = caret - 1;
+
+            e->kind = MD_KIND_CODE;
+            e->del1Start = innerEnd; e->del1End = caret;
+            e->del2Start = p;        e->del2End = p + 1;
+            e->styleStart = p;       e->styleEnd = innerEnd - 1;
+            e->newCaret = innerEnd - 1;
+            e->resetNormal = 1;
+            return 1;
+        }
+    }
+
+    /* No opening '`' behind the caret -- the just-typed '`' may instead be an
+       OPENING code delimiter for a closing '`' already later. */
+    for (q = caret; q < lineEnd; q++) {
+        if (buf[q] == '`' && q > caret) {
+            long innerEnd = q;
+
+            e->kind = MD_KIND_CODE;
+            e->del1Start = innerEnd;  e->del1End = innerEnd + 1;
+            e->del2Start = caret - 1; e->del2End = caret;
+            e->styleStart = caret - 1; e->styleEnd = innerEnd - 1;
+            e->newCaret = caret - 1;
+            e->resetNormal = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* [text](url) -- closing ')' completes a link (justTyped == ')'). */
+static int DetectLink(const char *buf, long caret, long lineStart,
+                      MdInlineEdit *e)
+{
+    long closeParenPos = caret - 1;
+    long p = closeParenPos - 1;
+
+    while (p >= lineStart && buf[p] != '(')
+        p--;
+
+    if (p >= lineStart && p > lineStart && buf[p - 1] == ']') {
+        long openParenPos = p;
+        long closeBracketPos = openParenPos - 1;
+        long urlStart = openParenPos + 1;
+        long urlLen = closeParenPos - urlStart;
+        long q = closeBracketPos - 1;
+
+        while (q >= lineStart && buf[q] != '[')
+            q--;
+
+        if (q >= lineStart) {
+            long openBracketPos = q;
+            long k;
+
+            if (urlLen < 0) urlLen = 0;
+            if (urlLen > 255) urlLen = 255;
+            e->linkURL[0] = (unsigned char) urlLen;
+            for (k = 0; k < urlLen; k++)
+                e->linkURL[1 + k] = (unsigned char) buf[urlStart + k];
+
+            e->kind = MD_KIND_LINK;
+            e->del1Start = closeBracketPos; e->del1End = caret;
+            e->del2Start = openBracketPos;  e->del2End = openBracketPos + 1;
+            e->styleStart = openBracketPos; e->styleEnd = closeBracketPos - 1;
+            e->newCaret = closeBracketPos - 1;
+            e->resetNormal = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justTyped)
 {
     MdInlineEdit e;
@@ -513,273 +720,31 @@ MdInlineEdit MdDetectInline(const char *buf, long len, long caret, char justType
     while (lineEnd < len && buf[lineEnd] != '\r')
         lineEnd++;
 
-    if (justTyped == ' ') {
-        short level = 0;
-        long p = lineStart;
-
-        while (level < 3 && p < caret - 1 && buf[p] == '#') {
-            level++;
-            p++;
-        }
-        if (level > 0 && p == caret - 1) {
-            /* "# " through "### " at line start: delete the prefix and the
-               space, then leave a bold, larger typing style in place so the
-               heading is typed live. No del2, no reset. */
-            e.kind = MD_KIND_HEADING;
-            e.level = level;
-            e.del1Start = lineStart;
-            e.del1End = caret;
-            e.styleStart = e.styleEnd = lineStart;
-            e.newCaret = lineStart;
-            e.resetNormal = 0;
-            return e;
-        }
-    } else if (justTyped == '*') {
-        if (caret >= 4 && buf[caret - 2] == '*' && buf[caret - 1] == '*') {
-            long p = caret - 4;
-
-            while (p >= lineStart) {
-                if (buf[p] == '*' && buf[p + 1] == '*' && p + 2 < caret - 2) {
-                    long innerStart = p + 2;
-                    long innerEnd = caret - 2;
-
-                    e.kind = MD_KIND_BOLD;
-                    e.del1Start = innerEnd; e.del1End = caret;
-                    e.del2Start = p;        e.del2End = innerStart;
-                    e.styleStart = p;       e.styleEnd = innerEnd - 2;
-                    e.newCaret = innerEnd - 2;
-                    e.resetNormal = 1;
-                    return e;
-                }
-                p--;
-            }
-
-            /* No opening ** behind the caret -- the just-typed ** may
-               instead be an OPENING delimiter for a closing ** already
-               sitting later in the line (bold typed closing-first). */
-            {
-                long q = caret + 1;
-
-                while (q + 1 < lineEnd) {
-                    if (buf[q] == '*' && buf[q + 1] == '*') {
-                        long innerEnd = q;
-
-                        e.kind = MD_KIND_BOLD;
-                        e.del1Start = innerEnd;  e.del1End = innerEnd + 2;
-                        e.del2Start = caret - 2; e.del2End = caret;
-                        e.styleStart = caret - 2; e.styleEnd = innerEnd - 2;
-                        e.newCaret = caret - 2;
-                        e.resetNormal = 1;
-                        return e;
-                    }
-                    q++;
-                }
-            }
-        } else if (caret >= 3 && buf[caret - 2] != '*') {
-            long p = caret - 2;
-
-            while (p >= lineStart) {
-                if (buf[p] == '*' &&
-                    (p == lineStart || buf[p - 1] != '*') &&
-                    buf[p + 1] != '*' && p + 1 < caret - 1) {
-                    long innerStart = p + 1;
-                    long innerEnd = caret - 1;
-
-                    e.kind = MD_KIND_ITALIC;
-                    e.del1Start = innerEnd; e.del1End = caret;
-                    e.del2Start = p;        e.del2End = innerStart;
-                    e.styleStart = p;       e.styleEnd = innerEnd - 1;
-                    e.newCaret = innerEnd - 1;
-                    e.resetNormal = 1;
-                    return e;
-                }
-                p--;
-            }
-
-            /* No opening * behind the caret -- the just-typed * may instead
-               be an OPENING italic delimiter for a closing * already later
-               in the line. */
-            {
-                long q = caret;
-
-                while (q < lineEnd) {
-                    if (buf[q] == '*' &&
-                        buf[q - 1] != '*' &&
-                        (q + 1 == lineEnd || buf[q + 1] != '*') &&
-                        q > caret) {
-                        long innerEnd = q;
-
-                        e.kind = MD_KIND_ITALIC;
-                        e.del1Start = innerEnd;  e.del1End = innerEnd + 1;
-                        e.del2Start = caret - 1; e.del2End = caret;
-                        e.styleStart = caret - 1; e.styleEnd = innerEnd - 1;
-                        e.newCaret = caret - 1;
-                        e.resetNormal = 1;
-                        return e;
-                    }
-                    q++;
-                }
-            }
-        }
-    } else if (justTyped == '`') {
-        long p = caret - 2;
-
-        while (p >= lineStart) {
-            if (buf[p] == '`' && p + 1 < caret - 1) {
-                long innerStart = p + 1;
-                long innerEnd = caret - 1;
-
-                e.kind = MD_KIND_CODE;
-                e.del1Start = innerEnd; e.del1End = caret;
-                e.del2Start = p;        e.del2End = innerStart;
-                e.styleStart = p;       e.styleEnd = innerEnd - 1;
-                e.newCaret = innerEnd - 1;
-                e.resetNormal = 1;
-                return e;
-            }
-            p--;
-        }
-
-        /* No opening ` behind the caret -- the just-typed ` may instead be
-           an OPENING code delimiter for a closing ` already later. */
-        {
-            long q = caret;
-
-            while (q < lineEnd) {
-                if (buf[q] == '`' && q > caret) {
-                    long innerEnd = q;
-
-                    e.kind = MD_KIND_CODE;
-                    e.del1Start = innerEnd;  e.del1End = innerEnd + 1;
-                    e.del2Start = caret - 1; e.del2End = caret;
-                    e.styleStart = caret - 1; e.styleEnd = innerEnd - 1;
-                    e.newCaret = caret - 1;
-                    e.resetNormal = 1;
-                    return e;
-                }
-                q++;
-            }
-        }
-    } else if (justTyped == '~') {
-        if (caret >= 4 && buf[caret - 2] == '~' && buf[caret - 1] == '~') {
-            long p = caret - 4;
-
-            while (p >= lineStart) {
-                if (buf[p] == '~' && buf[p + 1] == '~' && p + 2 < caret - 2) {
-                    long innerStart = p + 2;
-                    long innerEnd = caret - 2;
-
-                    e.kind = MD_KIND_STRIKE;
-                    e.del1Start = innerEnd; e.del1End = caret;
-                    e.del2Start = p;        e.del2End = innerStart;
-                    e.styleStart = p;       e.styleEnd = innerEnd - 2;
-                    e.newCaret = innerEnd - 2;
-                    e.resetNormal = 1;
-                    return e;
-                }
-                p--;
-            }
-
-            /* No opening ~~ behind the caret -- the just-typed ~~ may
-               instead be an OPENING delimiter for a closing ~~ already
-               sitting later in the line (strike typed closing-first). */
-            {
-                long q = caret + 1;
-
-                while (q + 1 < lineEnd) {
-                    if (buf[q] == '~' && buf[q + 1] == '~') {
-                        long innerEnd = q;
-
-                        e.kind = MD_KIND_STRIKE;
-                        e.del1Start = innerEnd;  e.del1End = innerEnd + 2;
-                        e.del2Start = caret - 2; e.del2End = caret;
-                        e.styleStart = caret - 2; e.styleEnd = innerEnd - 2;
-                        e.newCaret = caret - 2;
-                        e.resetNormal = 1;
-                        return e;
-                    }
-                    q++;
-                }
-            }
-        }
-    } else if (justTyped == '=') {
-        if (caret >= 4 && buf[caret - 2] == '=' && buf[caret - 1] == '=') {
-            long p = caret - 4;
-
-            while (p >= lineStart) {
-                if (buf[p] == '=' && buf[p + 1] == '=' && p + 2 < caret - 2) {
-                    long innerStart = p + 2;
-                    long innerEnd = caret - 2;
-
-                    e.kind = MD_KIND_HIGHLIGHT;
-                    e.del1Start = innerEnd; e.del1End = caret;
-                    e.del2Start = p;        e.del2End = innerStart;
-                    e.styleStart = p;       e.styleEnd = innerEnd - 2;
-                    e.newCaret = innerEnd - 2;
-                    e.resetNormal = 1;
-                    return e;
-                }
-                p--;
-            }
-
-            /* No opening == behind the caret -- the just-typed == may instead
-               be an OPENING delimiter for a closing == already later in the
-               line (highlight typed closing-first). */
-            {
-                long q = caret + 1;
-
-                while (q + 1 < lineEnd) {
-                    if (buf[q] == '=' && buf[q + 1] == '=') {
-                        long innerEnd = q;
-
-                        e.kind = MD_KIND_HIGHLIGHT;
-                        e.del1Start = innerEnd;  e.del1End = innerEnd + 2;
-                        e.del2Start = caret - 2; e.del2End = caret;
-                        e.styleStart = caret - 2; e.styleEnd = innerEnd - 2;
-                        e.newCaret = caret - 2;
-                        e.resetNormal = 1;
-                        return e;
-                    }
-                    q++;
-                }
-            }
-        }
-    } else if (justTyped == ')') {
-        long closeParenPos = caret - 1;
-        long p = closeParenPos - 1;
-
-        while (p >= lineStart && buf[p] != '(')
-            p--;
-
-        if (p >= lineStart && p > lineStart && buf[p - 1] == ']') {
-            long openParenPos = p;
-            long closeBracketPos = openParenPos - 1;
-            long urlStart = openParenPos + 1;
-            long urlLen = closeParenPos - urlStart;
-            long q = closeBracketPos - 1;
-
-            while (q >= lineStart && buf[q] != '[')
-                q--;
-
-            if (q >= lineStart) {
-                long openBracketPos = q;
-                long k;
-
-                if (urlLen < 0) urlLen = 0;
-                if (urlLen > 255) urlLen = 255;
-                e.linkURL[0] = (unsigned char) urlLen;
-                for (k = 0; k < urlLen; k++)
-                    e.linkURL[1 + k] = (unsigned char) buf[urlStart + k];
-
-                e.kind = MD_KIND_LINK;
-                e.del1Start = closeBracketPos; e.del1End = caret;
-                e.del2Start = openBracketPos;  e.del2End = openBracketPos + 1;
-                e.styleStart = openBracketPos; e.styleEnd = closeBracketPos - 1;
-                e.newCaret = closeBracketPos - 1;
-                e.resetNormal = 1;
-                return e;
-            }
-        }
+    switch (justTyped) {
+    case ' ':
+        DetectHeading(buf, caret, lineStart, &e);
+        break;
+    case '*':
+        /* '**' just completed => bold; otherwise a lone '*' => italic. */
+        if (!DetectPairDelim(buf, caret, lineStart, lineEnd, '*',
+                             MD_KIND_BOLD, &e) &&
+            caret >= 3 && buf[caret - 2] != '*')
+            DetectItalic(buf, caret, lineStart, lineEnd, &e);
+        break;
+    case '`':
+        DetectCode(buf, caret, lineStart, lineEnd, &e);
+        break;
+    case '~':
+        DetectPairDelim(buf, caret, lineStart, lineEnd, '~', MD_KIND_STRIKE, &e);
+        break;
+    case '=':
+        DetectPairDelim(buf, caret, lineStart, lineEnd, '=', MD_KIND_HIGHLIGHT, &e);
+        break;
+    case ')':
+        DetectLink(buf, caret, lineStart, &e);
+        break;
+    default:
+        break;
     }
 
     return e;
