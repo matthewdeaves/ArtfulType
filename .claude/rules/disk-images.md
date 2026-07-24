@@ -26,7 +26,13 @@ workflows. The images are formatted and *blessed* in software on Linux — no Ma
   hardware: `DIFormat`/`DIVerify` then a raw `PBWrite` clone to the `.Sony`
   driver. It exists because `LaunchAPPL` can ship an *app* to a bare Mac but not
   a disk image, so this is how a Mac SE with only a System makes its own bootable
-  ArtfulType floppy. Hardware-validated on a real Mac SE. See its README.
+  ArtfulType floppy. Hardware-validated on a real Mac SE (deploy: `LaunchAPPL -e
+  tcp --tcp-address <mac-ip> ArtfulTypeFloppyWriter.bin`, then insert a blank
+  800K DD floppy — it writes and boots). **`release.yml` now builds and ships it**
+  (the `build-floppy-writer` job runs in the Retro68 container after
+  `build-disks` and embeds that release's freshly built `dist/ArtfulType-800K.dsk`,
+  so the attached `ArtfulTypeFloppyWriter.bin` can never carry a stale image);
+  building from source is only for embedding a different/in-dev image. See its README.
 
 - **Blessing an HFS volume in software (no Mac).** `hformat` makes a mountable
   volume but *not a bootable one*: it writes neither the boot blocks nor the
