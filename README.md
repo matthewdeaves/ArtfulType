@@ -62,6 +62,7 @@ Write in **Writer** mode (Markdown hidden, text shown styled); switch to **Markd
 | Cut / Copy / Paste | ⌘X / ⌘C / ⌘V |
 | Select All | ⌘A |
 | Bold / Italic / Code | ⌘B / ⌘I / ⌘K |
+| Strikethrough / Highlight | ⌘T / ⌘H |
 | Heading 1 / 2 / 3 | ⌘1 / ⌘2 / ⌘3 |
 | Link | ⌘L |
 | Zoom In / Out / Default | ⌘= / ⌘- / ⌘0 |

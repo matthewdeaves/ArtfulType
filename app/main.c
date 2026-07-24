@@ -75,7 +75,7 @@ static void MakeMenu(void)
     DisableItem(gEditMenu, iRedo);
 
     styleMenu = NewMenu(mStyle, "\pStyle");
-    AppendMenu(styleMenu, "\pBold/B;Italic/I;Code/K;Strikethrough;Highlight;(-;Heading 1/1;Heading 2/2;Heading 3/3;(-;Link/L;(-;None");
+    AppendMenu(styleMenu, "\pBold/B;Italic/I;Code/K;Strikethrough/T;Highlight/H;(-;Heading 1/1;Heading 2/2;Heading 3/3;(-;Link/L;(-;None");
     InsertMenu(styleMenu, 0);
 
     gViewMenu = NewMenu(mView, "\pView");
