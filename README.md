@@ -4,7 +4,7 @@ A distraction-free Markdown editor for classic 68k Macintoshes — System 6 & 7,
 
 ![ArtfulType running in Writer mode](screenshot1.png)
 
-> **A fork of [ActionRetro/ArtfulType](https://github.com/ActionRetro/ArtfulType)** by Action Retro (Sean Malseed). Same app, same spirit — this fork adds strikethrough and nested styles, printing, System 6 support, a host-tested core under CI, and bootable disk images built on Linux with no Mac (see [What this fork adds](#what-this-fork-adds)). The *ArtfulType* name, icon, and artwork remain © Sean Malseed and are **not** covered by the code's GPLv3 — see [ASSETS_LICENSE](ASSETS_LICENSE).
+> **A fork of [ActionRetro/ArtfulType](https://github.com/ActionRetro/ArtfulType)** by Action Retro (Sean Malseed). Same app, same spirit — this fork adds strikethrough and nested styles, printing, System 6 support, a host-tested core under CI, and bootable disk images built on Linux with no Mac (see [Under the hood](#under-the-hood)). The *ArtfulType* name, icon, and artwork remain © Sean Malseed and are **not** covered by the code's GPLv3 — see [ASSETS_LICENSE](ASSETS_LICENSE).
 
 Video overview: [Artful Type demo](https://youtu.be/HEheu_r9UGw)
 
@@ -13,7 +13,7 @@ Video overview: [Artful Type demo](https://youtu.be/HEheu_r9UGw)
 One document, two views toggled from the View menu — **Writer** (Markdown rendered live as styled text) and **Markdown** (the raw source). Saved files are always plain `.md`, editable anywhere.
 
 - **Live styling** — bold, italic, `code`, headings, links, **strikethrough**, and **`==highlight==`**, as you type or from the Style menu ★
-- **Block Markdown** — horizontal rules (`---`/`***`/`___`), blockquotes (`> `, nestable), fenced code blocks (```` ``` ````/`~~~`), and lists — bullets (`- `/`* `/`+ ` → •), numbered (`1. `), nested, and task checkboxes (`- [ ]`/`- [x]`) — all rendered live in Writer mode, all round-tripping to clean Markdown ★
+- **Block Markdown** — horizontal rules (`---`/`***`/`___`), blockquotes (`> `, nestable), fenced code blocks (```` ``` ````), and lists — bullets (`- `/`* `/`+ ` → •), numbered (`1. `), nested, and task checkboxes (`- [ ]`/`- [x]`) — all rendered live in Writer mode, all round-tripping to clean Markdown ★
 - **Styles nest and combine** — a struck bold word, a bold link, a highlighted phrase, `***bold italic***` — round-tripping losslessly between Writer and Markdown ★
 - **Print** — Page Setup and Print through the classic Printing Manager — the formatted Writer view or the raw Markdown source — on System 6 and System 7, both tested on a real LaserWriter ★
 - **Links** — type `[text](url)` inline, or select text → Style → Link
@@ -27,9 +27,9 @@ One document, two views toggled from the View menu — **Writer** (Markdown rend
 
 ★ = new in this fork.
 
-## What this fork adds
+## Under the hood
 
-Beyond the features marked above, this is a near-total engineering rework under the same design and branding:
+The ★-marked features above (printing included) are new in this fork; beneath them it is also a near-total engineering rework:
 
 - **A pure, testable core.** The Markdown strip / emit / detect / paginate logic lives in `mdcore` — Toolbox-free C, run under a host unit-test harness and gated by **CI** (host tests, `cppcheck`, and a real 68k build on every push).
 - **Correctness & robustness.** Hardened Memory Manager usage, a guarded 32K TextEdit limit that stops silent save failures, and reclaimed link IDs so long sessions don't exhaust the table.
