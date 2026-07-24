@@ -117,7 +117,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          prerelease: true
+          # Pre-release only for suffixed tags (e.g. v1.1.0-alpha); a plain
+          # vX.Y.Z is a full, latest release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
           generate_release_notes: true
           body: |
             Distraction-free Markdown editor for classic 68k Macs (System 6/7).
