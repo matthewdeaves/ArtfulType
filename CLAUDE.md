@@ -73,21 +73,43 @@ no style flag at all. The adapter detects each block by *content* at draw time (
 a pure `mdcore` predicate) and overpaints — the marker text is never modified, so
 the Markdown round-trips untouched and no colour channel is spent (all three are
 full). This is the sanctioned pattern now that the colour space is exhausted, and
-every line-level block uses it: **horizontal rule** (`---`/`***`/`___` → `DrawHrRuns`,
+these line-level blocks use it: **horizontal rule** (`---`/`***`/`___` → `DrawHrRuns`,
 pure `MdIsHorizontalRule`), **blockquote** (`> ` → `DrawBlockquoteRuns` margin bars,
-`MdBlockquoteDepth`, nestable), **fenced code block** (```` ``` ````/`~~~` →
-`DrawCodeBlockRuns` gray stipple across the fenced region, `MdIsCodeFence`), and
-**lists** (`- `/`* `/`+ ` bullets → a drawn `•`, and `- [ ]`/`- [x]` task boxes →
-`DrawListRuns`, `MdParseListItem`; numbered `1. ` stays literal). All six Writer
-overpaints (these plus strike and highlight) are painted by one
+`MdBlockquoteDepth`, nestable), and **lists** (`- `/`* `/`+ ` bullets → a drawn `•`,
+and `- [ ]`/`- [x]` task boxes → `DrawListRuns`, `MdParseListItem`; numbered `1. `
+stays literal). These plus strike and highlight are painted by one
 `DrawWriterOverlays` pass that walks the display lines **once**, classifies each
 line (fence/rule/quote/list, tracked across wrapped lines) and dispatches small
-per-line helpers (`ShadeCodeLine`, `PaintHighlightLine`, `PaintBlockquoteBars`,
-`PaintListMarker`, `StrikeLineRuns`, `PaintRule`) back-to-front — one walk, not
-six. For blocks whose markers would otherwise be hidden, the caret's own line is
-left literal so it stays editable (the `revealActive` flag). Because the
-Writer buffer text always equals the canonical text for these lines, the round-trip
-is lossless by construction.
+per-line helpers (`PaintHighlightLine`, `PaintBlockquoteBars`, `PaintListMarker`,
+`StrikeLineRuns`, `PaintRule`) back-to-front — one walk. For blocks whose markers
+would otherwise be hidden, the caret's own line is left literal so it stays
+editable (the `revealActive` flag).
+
+**Fenced code blocks are NOT an overpaint.** ```` ``` ```` only — the tilde form
+`~~~` is unsupported so a tilde run is only ever strikethrough `~~`/literal, and
+because the backtick collides with inline `` `code` `` the live detector leaves a
+3+ backtick run alone (`MdIsCodeFence` still tracks fences at draw time purely so a
+`---`/`> `/`- ` marker inside a not-yet-closed block isn't decorated). Like **every
+other Writer style**, a fenced block **hides its markers**: `MdStrip` drops the
+opening and closing ``` lines (info string and all) and emits just the body as one
+`MD_KIND_CODE` (Monaco) span **that includes the body's internal `\r` line
+breaks**. That "a code run spans a newline" is the whole trick — the emit
+reconstructs the fence from it **structurally, not by font-sniffing**: a `code`
+run at a line start is re-fenced with ``` iff it contains a `\r` (a multi-line
+block); a `code` run with no `\r` is inline `` `code` ``. Nothing else can produce
+a multi-line code run, and two adjacent inline-code lines stay separate because
+the `\r` between them is plain, not Monaco. The block-level emit is **pure**:
+`MdEmit` (in `mdcore`) walks the whole-document run list — fences, `#` headings,
+and per-line inline via `MdEmitInline` — and `SyncHiddenToCanonical` is now just
+the adapter that reads those runs off TextEdit (`BuildDocRuns`) and hands them to
+`MdEmit`. Because the block logic is pure it is host-tested end-to-end by
+`tests/test_roundtrip.c` (`emit(strip(doc)) == normalize(doc)`, plus idempotence),
+the coverage that had been missing while this logic lived in the Toolbox adapter.
+Round-trips losslessly except that a **one-line** ```` ``` ```` block normalises to
+inline `` `code` `` (identical rendering). Live typing gets the hidden-marker
+Monaco body via `RerenderWriterView`: the moment a backtick makes the fences
+balance (`CodeFencesBalanced`), the view is emitted-and-re-stripped in place (caret
+shifted back by the stripped markers), exactly like a Markdown↔Writer toggle.
 
 The pure engine `mdcore` (`app/mdcore.{c,h}`) does strip / emit / span→run
 flatten / live-detect on plain buffers; `markdown.c` is the thin Mac adapter
