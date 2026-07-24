@@ -605,6 +605,15 @@ static void EventLoop(void)
                             else {
                                 gTypingRunActive = false;
                                 TEClick(event.where, (event.modifiers & shiftKey) != 0, gActiveTE);
+                                /* TEClick redraws any text whose selection state
+                                   changed (e.g. a run being deselected) but not
+                                   our hand-drawn Writer overlays, and posts no
+                                   update event -- so a click that deselects a
+                                   struck/highlighted run erases its overlay until
+                                   the next repaint. Repaint them now, exactly as
+                                   the scroll and keystroke paths do. */
+                                if (gHideMarkdown)
+                                    DrawWriterOverlays(gActiveTE, true);
                             }
                         }
                     }
