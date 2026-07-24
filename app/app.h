@@ -330,6 +330,7 @@ void ToggleHeadingHidden(short level);
 void DetectInlineMarkdown(char justTyped);
 void DoStyleCommand(short menuItem);
 void DrawWriterOverlays(TEHandle te, Boolean revealActive);
+void DrawWriterText(TEHandle te);
 Boolean WriterHasStippleBackground(void);
 Boolean CodeFencesBalanced(void);
 void RerenderWriterView(void);

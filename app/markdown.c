@@ -2105,3 +2105,96 @@ void DrawWriterOverlays(TEHandle te, Boolean revealActive)
     SetClip(saveClip);
     DisposeRgn(saveClip);
 }
+
+/*
+    Lay the record's text down with plain QuickDraw -- one DrawText per style run
+    -- instead of TEUpdate. The print path calls this: on a LaserWriter TextEdit's
+    own TEUpdate drawing does not image at all (a FrameRect and raw DrawString on
+    the very same printing port print perfectly, proving raw QuickDraw text works
+    and TEUpdate is the one thing that doesn't), so we draw the already-wrapped
+    lines ourselves. Wrapping is whatever TextEdit computed -- we reuse lineStarts
+    verbatim, so the page breaks pagination measured still hold. Each run's
+    font/face/size reproduce the Writer view (bold, italic, Monaco code, larger
+    headings, underlined links); strike / highlight / rules / bullets are painted
+    afterward by DrawWriterOverlays, exactly as on screen. Text is forced black:
+    the tsColor channels carry link-id / strike / highlight metadata, not colours.
+
+    Draws only lines that fall in the view; ClipRect (set by the caller to the page
+    rect) trims partial lines. Assumes the caller set destRect/viewRect for the
+    page and asserted a black pen with pHiliteBit set. Caller-owned port state is
+    left changed (font/face/size/mode) -- the print path re-asserts per page.
+*/
+void DrawWriterText(TEHandle te)
+{
+    short nLines = (**te).nLines;
+    long teLen = (**te).teLength;
+    Handle hText = (**te).hText;
+    Rect view = (**te).viewRect;
+    short L;
+
+    if (teLen == 0 || nLines == 0 || hText == NULL)
+        return;
+
+    TextMode(srcOr);
+    ForeColor(blackColor);
+    BackColor(whiteColor);
+
+    HLock(hText);
+    for (L = 0; L < nLines; L++) {
+        long ls = (**te).lineStarts[L];
+        long le = (L + 1 < nLines) ? (**te).lineStarts[L + 1] : teLen;
+        Point base = TEGetPoint((short) ls, te);
+        TextStyle st;
+        short lh, fa;
+        FontInfo fi;
+        short baseline;
+        long c;
+
+        if (base.v < view.top - MAX_LINE_HEIGHT)
+            continue;               /* wholly above the page */
+        if (base.v - MAX_LINE_HEIGHT > view.bottom)
+            break;                  /* this and every later line below it */
+
+        /* Don't draw the line's trailing carriage return. */
+        if (le > ls && (*hText)[le - 1] == '\r')
+            le--;
+        if (le <= ls)
+            continue;               /* blank line: nothing to draw */
+
+        /* TEGetPoint's vertical is the line BOTTOM; the baseline sits one descent
+           above it. Use the line's first run for the metric (a line is a single
+           font in all but rare mixed-size cases, and TextEdit shares one baseline
+           across the line anyway). */
+        TEGetStyle((short) ls, &st, &lh, &fa, te);
+        TextFont(st.tsFont);
+        TextFace(st.tsFace);
+        TextSize(st.tsSize);
+        GetFontInfo(&fi);
+        baseline = (short) (base.v - fi.descent);
+
+        MoveTo(base.h, baseline);
+        c = ls;
+        while (c < le) {
+            long segEnd = c + 1;
+
+            TEGetStyle((short) c, &st, &lh, &fa, te);
+            while (segEnd < le) {
+                TextStyle st2;
+                short lh2, fa2;
+
+                TEGetStyle((short) segEnd, &st2, &lh2, &fa2, te);
+                if (st2.tsFont != st.tsFont || st2.tsFace != st.tsFace ||
+                    st2.tsSize != st.tsSize)
+                    break;
+                segEnd++;
+            }
+            TextFont(st.tsFont);
+            TextFace(st.tsFace);
+            TextSize(st.tsSize);
+            /* Pen advances across each run, so successive runs abut correctly. */
+            DrawText(*hText, (short) c, (short) (segEnd - c));
+            c = segEnd;
+        }
+    }
+    HUnlock(hText);
+}

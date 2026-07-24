@@ -277,8 +277,8 @@ static void DrawPage(TEHandle te, short pg)
     saveClip = NewRgn();
     GetClip(saveClip);
 
-    /* PrOpenPage fully reinitializes the printing grafPort every page; TextEdit
-       draws each run in its own font/size from the style record, so re-assert
+    /* PrOpenPage fully reinitializes the printing grafPort every page; the text
+       is drawn in each run's own font/size (see DrawWriterText), so re-assert
        only the pen/colors we rely on. */
     PenNormal();
     ForeColor(blackColor);
@@ -292,7 +292,23 @@ static void DrawPage(TEHandle te, short pg)
     (**te).viewRect = rPage;
     ClipRect(&rPage);
 
-    TEUpdate(&rPage, te);
+    /* Establish the page image before laying text down, exactly as both on-screen
+       paths do (main.c DoUpdate, scrolling.c EraseRect before drawing) and as
+       every Inside Macintosh page-drawing template does. On the spooling
+       LaserWriter (bJDocLoop == bSpoolLoop) the opening fill is what "opens" the
+       page's picture; without it the raw-QuickDraw text and overlays failed to
+       image and the sheet ejected wholly blank. */
+    EraseRect(&rPage);
+    /* Assert pHiliteBit before drawing text: if it is clear (TextEdit clears it
+       drawing the on-screen selection) QuickDraw substitutes the hilite colour --
+       white on a b/w print port -- for the foreground on the next text op, which
+       would print the glyphs invisibly. Same guard the overlays use (issue #9). */
+    LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
+    /* Draw the text with plain QuickDraw, NOT TEUpdate. TextEdit's TEUpdate does
+       not image on the LaserWriter (proven: a FrameRect and raw DrawString on this
+       same port printed while every TEUpdate came out blank); DrawWriterText lays
+       the already-wrapped lines down with DrawText, which images correctly. */
+    DrawWriterText(te);
     /* The block and non-face features aren't TextEdit faces; overpaint them
        exactly like the on-screen path (see DrawWriterOverlays -- each pass is a
        no-op when the buffer carries none). revealActive is false so every rule
