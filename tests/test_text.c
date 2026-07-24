@@ -130,11 +130,13 @@ static void test_codefence(void)
     CHECK_EQ(MdIsCodeFence("```", 3), 1, "three backticks");
     CHECK_EQ(MdIsCodeFence("~~~", 3), 1, "three tildes");
     CHECK_EQ(MdIsCodeFence("```c", 4), 1, "backticks with info string");
+    CHECK_EQ(MdIsCodeFence("~~~ruby", 7), 1, "tildes with info string");
     CHECK_EQ(MdIsCodeFence("`````", 5), 1, "five backticks");
     CHECK_EQ(MdIsCodeFence("  ```", 5), 1, "two leading spaces");
 
     CHECK_EQ(MdIsCodeFence("``", 2), 0, "only two backticks");
     CHECK_EQ(MdIsCodeFence("```a`b", 6), 0, "backtick in info string");
+    CHECK_EQ(MdIsCodeFence("~~~word~~~", 10), 0, "tilde in info string (inline ~~~word~~~)");
     CHECK_EQ(MdIsCodeFence("", 0), 0, "empty line");
     CHECK_EQ(MdIsCodeFence("code", 4), 0, "plain text");
     CHECK_EQ(MdIsCodeFence("    ```", 7), 0, "four spaces disqualifies");

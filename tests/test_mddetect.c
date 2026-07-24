@@ -202,6 +202,23 @@ static void test_no_match_cases(void)
              "a bare ~~ with nothing before it does not match");
 }
 
+static void test_triple_run_not_paired(void)
+{
+    /* A run of three or more delimiters is not a valid "dd" span. Typing
+       ~~~word~~~ must stay literal instead of collapsing to strikethrough --
+       the bug where the last '~' could not be typed. Both the moment the
+       second closing '~' lands (opener is the ~~~ run) and the third one lands
+       (closer becomes ~~~) must report no edit. */
+    CHECK_EQ(det("~~~word~~", 9, '~').kind, MD_INLINE_NONE,
+             "~~~word~~ : a ~~~ opener is not a strikethrough delimiter");
+    CHECK_EQ(det("~~~word~~~", 10, '~').kind, MD_INLINE_NONE,
+             "~~~word~~~ : a ~~~ closer is not a strikethrough delimiter");
+    CHECK_EQ(det("===mark===", 10, '=').kind, MD_INLINE_NONE,
+             "===mark=== : a === run is not a highlight delimiter");
+    CHECK_EQ(det("***x***", 7, '*').kind, MD_INLINE_NONE,
+             "***x*** : a *** run is left to MdStrip, not auto-bolded");
+}
+
 static void test_carriage_return_not_handled(void)
 {
     /* '\r' is deliberately the adapter's job (it just resets the typing
@@ -229,6 +246,7 @@ int main(void)
     test_heading_interior_line();
     test_four_hashes_not_heading();
     test_no_match_cases();
+    test_triple_run_not_paired();
     test_carriage_return_not_handled();
     return TEST_RESULT();
 }

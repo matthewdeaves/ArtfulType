@@ -95,6 +95,18 @@ static void test_strike(void)
     n = strip("1~2", 0, 1);
     CHECK_STR(g_out, n, "1~2", "lone tilde kept literal");
     CHECK_EQ(g_nSpans, 0, "no span for a lone tilde");
+
+    /* A run of three or more tildes is not a valid ~~ delimiter: ~~~word~~~
+       must round-trip as literal text, not collapse to a strike span (the
+       bug behind "can't type the last ~" / the whole row highlighting). */
+    n = strip("~~~word~~~", 0, 1);
+    CHECK_STR(g_out, n, "~~~word~~~", "triple ~~~ kept literal");
+    CHECK_EQ(g_nSpans, 0, "no strike span for a ~~~ run");
+
+    /* Mismatched run lengths (2 open, 3 close) also stay literal. */
+    n = strip("~~word~~~", 0, 1);
+    CHECK_STR(g_out, n, "~~word~~~", "mismatched ~~ / ~~~ kept literal");
+    CHECK_EQ(g_nSpans, 0, "no strike span for mismatched tilde runs");
 }
 
 static void test_highlight(void)
@@ -122,6 +134,11 @@ static void test_highlight(void)
     n = strip("1=2", 0, 1);
     CHECK_STR(g_out, n, "1=2", "lone equals kept literal");
     CHECK_EQ(g_nSpans, 0, "no span for a lone equals");
+
+    /* A run of three or more equals is not a valid == delimiter. */
+    n = strip("===mark===", 0, 1);
+    CHECK_STR(g_out, n, "===mark===", "triple === kept literal");
+    CHECK_EQ(g_nSpans, 0, "no highlight span for a === run");
 }
 
 static void test_link(void)

@@ -49,6 +49,18 @@ static long MdStripInlineAt(const char *src, long i, long end,
                             MdSpan *spans, short spanCap, short *nSpans,
                             MdLinkTable *links);
 
+/* True when src[p..p+2) is exactly a two-character run of delimiter d -- not
+   the edge of a longer run. A run of three or more (e.g. ~~~) is not a valid
+   ~~/== delimiter, so "~~~word~~~" is stripped as literal text rather than a
+   strike/highlight span (mirrors the live detector and the fence rule). The
+   nesting delimiters '*'/'`' are handled separately and keep their own logic. */
+static int IsPairDelimAt(const char *src, long p, long end, char d)
+{
+    return p + 1 < end && src[p] == d && src[p + 1] == d
+        && !(p > 0 && src[p - 1] == d)
+        && !(p + 2 < end && src[p + 2] == d);
+}
+
 /* Strips src[a..b) as inline content, appending stripped text to out and
    recording spans, recursing into any nested delimiter pairs. */
 static void MdStripSpanContent(const char *src, long a, long b,
@@ -147,12 +159,12 @@ static long MdStripInlineAt(const char *src, long i, long end,
             return (j + 1) - i;
         }
     }
-    if (i + 1 < end && src[i] == '~' && src[i + 1] == '~') {
+    if (IsPairDelimAt(src, i, end, '~')) {
         long j = i + 2;
 
-        while (j + 1 < end && !(src[j] == '~' && src[j + 1] == '~'))
+        while (j + 1 < end && !IsPairDelimAt(src, j, end, '~'))
             j++;
-        if (j + 1 < end) {
+        if (IsPairDelimAt(src, j, end, '~')) {
             long outStart = *outLen;
             MdStripSpanContent(src, i + 2, j, out, outLen,
                                spans, spanCap, nSpans, links);
@@ -161,12 +173,12 @@ static long MdStripInlineAt(const char *src, long i, long end,
             return (j + 2) - i;
         }
     }
-    if (i + 1 < end && src[i] == '=' && src[i + 1] == '=') {
+    if (IsPairDelimAt(src, i, end, '=')) {
         long j = i + 2;
 
-        while (j + 1 < end && !(src[j] == '=' && src[j + 1] == '='))
+        while (j + 1 < end && !IsPairDelimAt(src, j, end, '='))
             j++;
-        if (j + 1 < end) {
+        if (IsPairDelimAt(src, j, end, '=')) {
             long outStart = *outLen;
             MdStripSpanContent(src, i + 2, j, out, outLen,
                                spans, spanCap, nSpans, links);
@@ -541,10 +553,22 @@ static int DetectPairDelim(const char *buf, long caret, long lineStart,
     if (!(caret >= 4 && buf[caret - 2] == d && buf[caret - 1] == d))
         return 0;
 
+    /* A run of three or more 'd's is not a valid "dd" delimiter: typing
+       ~~~word~~~ (or ***x***, ===y===) must stay literal, not collapse to a
+       styled span. Reject when the just-completed pair is only the tail of a
+       longer run; nesting like ***x*** is left for MdStrip to resolve on the
+       mode switch. */
+    if (caret - 3 >= lineStart && buf[caret - 3] == d)
+        return 0;
+
     /* An opening "dd" behind the caret => the pair just closed. */
     for (p = caret - 4; p >= lineStart; p--) {
         if (buf[p] == d && buf[p + 1] == d && p + 2 < caret - 2) {
             long innerEnd = caret - 2;
+
+            /* Skip an opener that is itself part of a 3+ run. */
+            if ((p > lineStart && buf[p - 1] == d) || buf[p + 2] == d)
+                continue;
 
             e->kind = kind;
             e->del1Start = innerEnd; e->del1End = caret;
@@ -562,6 +586,11 @@ static int DetectPairDelim(const char *buf, long caret, long lineStart,
     for (q = caret + 1; q + 1 < lineEnd; q++) {
         if (buf[q] == d && buf[q + 1] == d) {
             long innerEnd = q;
+
+            /* Skip a closer that is itself part of a 3+ run. */
+            if ((q > caret && buf[q - 1] == d) ||
+                (q + 2 < lineEnd && buf[q + 2] == d))
+                continue;
 
             e->kind = kind;
             e->del1Start = innerEnd;  e->del1End = innerEnd + 2;
@@ -991,14 +1020,16 @@ int MdIsCodeFence(const char *line, long len)
     }
     if (count < 3)
         return 0;
-    if (marker == '`') {
-        /* A backtick info string may not itself contain a backtick (CommonMark),
-           so "```code`inline" is not a fence -- it is a line with inline code. */
-        while (i < len) {
-            if (line[i] == '`')
-                return 0;
-            i++;
-        }
+    /* The info string may not repeat the fence marker. For backticks this is
+       CommonMark ("```code`inline" is a line with inline code, not a fence); we
+       extend the same rule to tildes so that an inline "~~~word~~~" reads as
+       literal text rather than opening an (unclosed) fenced block that would
+       shade the rest of the document. A real opener is a bare run ("~~~") or a
+       run plus a marker-free info string ("~~~ruby"). */
+    while (i < len) {
+        if (line[i] == marker)
+            return 0;
+        i++;
     }
     return 1;
 }
