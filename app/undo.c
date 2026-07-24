@@ -44,18 +44,30 @@ static Boolean CaptureSnapshot(UndoSnapshot stack[], short *count)
     long len;
     short i;
 
-    if (gHideMarkdown)
-        SyncHiddenToCanonical();
-
-    len = (**gTE).teLength;
-    textH = NewHandle(len);
-    if (textH == NULL)
-        return false;
-    HLock(textH);
-    HLock((**gTE).hText);
-    BlockMove(*(**gTE).hText, *textH, len);
-    HUnlock((**gTE).hText);
-    HUnlock(textH);
+    if (gHideMarkdown) {
+        /* Writer mode: the snapshot is the canonical Markdown for gHiddenTE.
+           Emit it straight into the snapshot handle rather than round-tripping
+           through gTE (SyncHiddenToCanonical): gTE is not displayed here and
+           every consumer -- save, mode switch, BuildHiddenView -- resyncs it
+           before reading, so the full TEDelete + TEInsert (line re-wrap) +
+           ClearStyles rebuild of the invisible gTE would be wasted work on this
+           hot path (a style command, or the start of every typing run). Trim
+           the 5x emit headroom before parking it in the undo stack. */
+        textH = EmitCanonicalHandle(&len);
+        if (textH == NULL)
+            return false;
+        SetHandleSize(textH, len);
+    } else {
+        len = (**gTE).teLength;
+        textH = NewHandle(len);
+        if (textH == NULL)
+            return false;
+        HLock(textH);
+        HLock((**gTE).hText);
+        BlockMove(*(**gTE).hText, *textH, len);
+        HUnlock((**gTE).hText);
+        HUnlock(textH);
+    }
 
     if (*count == MAX_UNDO_LEVELS) {
         FreeSnapshot(&stack[0]);

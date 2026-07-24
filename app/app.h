@@ -316,6 +316,7 @@ void SuppressDrawing(TEHandle te, Rect *saved);
 void RestoreDrawing(TEHandle te, const Rect *saved);
 void BuildHiddenView(void);
 void SyncHiddenToCanonical(void);
+Handle EmitCanonicalHandle(long *outLen);
 Handle EncodeSelectionAsMarkdown(short start, short end, TEHandle te);
 void InsertMarkdownAsStyled(Handle srcH, long srcLen, TEHandle te);
 void WrapSelection(char *prefix, char *suffix);

@@ -804,30 +804,70 @@ static void SnapshotLinkTable(void)
         BlockMove(gLinkURLs[li], gEmitLinks.url[li], gLinkURLs[li][0] + 1);
 }
 
-/* Coalesces gHiddenTE's per-character styles into the WHOLE-DOCUMENT run list
-   MdEmit consumes: contiguous runs over [0, len), each carrying the six inline
-   attributes plus a heading level (bold + a heading-sized run => heading). This
-   is the fast, O(len) inverse of ApplySpanStyles -- one TEGetStyle per character,
-   no per-line re-scan. Plain text (and a code block's Monaco body, '\r' and all)
-   coalesces across line breaks, so a code run that spans a '\r' is a fenced block
-   and a large plain document stays a handful of runs; MdEmit clamps runs to each
-   line as it walks. Runs break on the six attributes AND the heading level, so a
-   heading line is never merged into surrounding text. Returns the run count;
-   folds any overflow past `cap` into the last run (unreachable in practice --
-   run count is bounded by style changes, itself bounded by MD_MAX_SPANS). */
+/* Coalesces gHiddenTE's styles into the WHOLE-DOCUMENT run list MdEmit consumes:
+   contiguous runs over [0, len), each carrying the six inline attributes plus a
+   heading level (bold + a heading-sized run => heading). The inverse of
+   ApplySpanStyles.
+
+   Walks TextEdit's OWN style-run table (TEGetStyleHandle) rather than probing
+   TEGetStyle once per character: each StyleRun already spans a maximal run of
+   identical (font, face, size, colour), so this is O(styleRuns) -- dozens --
+   instead of O(len) trap calls. On a real 68000 the per-character version was
+   the dominant cost of every undo snapshot (~11 s on the sample doc); this is
+   the fix. The mapping from each run's STElement to the six MD attributes is
+   byte-for-byte the same as before, so the emitted Markdown is unchanged.
+
+   Plain text (and a code block's Monaco body, '\r' and all) coalesces across
+   line breaks, so a code run that spans a '\r' is a fenced block and a large
+   plain document stays a handful of runs; MdEmit clamps runs to each line as it
+   walks. Runs break on the six attributes AND the heading level, so a heading
+   line is never merged into surrounding text. Returns the run count; folds any
+   overflow past `cap` into the last run (unreachable in practice -- run count is
+   bounded by style changes, itself bounded by MD_MAX_SPANS). */
 static short BuildDocRuns(TEHandle te, long len, short monacoFont,
                           MdRun *runs, short cap)
 {
     short n = 0;
-    long i;
+    short nRuns, k;
+    TEStyleHandle sh;
+    STHandle tab;
+    SignedByte shState, tabState;
 
-    for (i = 0; i < len; i++) {
+    if (len <= 0)
+        return 0;
+    sh = TEGetStyleHandle(te);
+    if (sh == NULL)
+        return 0;
+    tab = (**sh).styleTab;
+
+    /* No Memory Manager allocation happens in the loop (the mappers are pure),
+       but lock both handles anyway so the master pointers we dereference per
+       run can't move under us. */
+    shState = HGetState((Handle) sh);
+    tabState = HGetState((Handle) tab);
+    HLock((Handle) sh);
+    HLock((Handle) tab);
+
+    nRuns = (**sh).nRuns;
+    for (k = 0; k < nRuns; k++) {
+        long runStart = (**sh).runs[k].startChar;
+        long runEnd = (**sh).runs[k + 1].startChar;   /* runs[nRuns] = len sentinel */
+        short si = (**sh).runs[k].styleIndex;
+        STElement ste = (*tab)[si];
         TextStyle st;
-        short lh, fa;
         MdStyleFields sf;
         MdRun cur;
 
-        TEGetStyle((short) i, &st, &lh, &fa, te);
+        if (runEnd > len)
+            runEnd = len;
+        if (runStart >= runEnd)
+            continue;
+
+        st.tsFont = ste.stFont;
+        st.tsFace = ste.stFace;
+        st.tsSize = ste.stSize;
+        st.tsColor = ste.stColor;
+
         sf.face = MdFaceFromToolbox(st.tsFace);
         sf.code = (st.tsFont == monacoFont);
         sf.linkID = GetLinkID(&st);
@@ -840,38 +880,46 @@ static short BuildDocRuns(TEHandle te, long len, short monacoFont,
             runs[n - 1].code == cur.code && runs[n - 1].link == cur.link &&
             runs[n - 1].strike == cur.strike && runs[n - 1].highlight == cur.highlight &&
             runs[n - 1].heading == cur.heading) {
-            runs[n - 1].end = i + 1;
+            runs[n - 1].end = runEnd;
         } else if (n < cap) {
-            cur.start = i;
-            cur.end = i + 1;
+            cur.start = runStart;
+            cur.end = runEnd;
             runs[n] = cur;
             n++;
         } else {
-            runs[n - 1].end = i + 1;
+            runs[n - 1].end = runEnd;
         }
     }
+
+    HSetState((Handle) tab, tabState);
+    HSetState((Handle) sh, shState);
     return n;
 }
 
-void SyncHiddenToCanonical(void)
+/*
+    Emits gHiddenTE's styled runs as canonical Markdown into a freshly allocated
+    Handle, returning it (caller owns; DisposeHandle when done) with *outLen set
+    to the byte count, or NULL on allocation failure. The handle is left UNLOCKED
+    and sized to the 5x emit headroom, not trimmed -- callers that park it long
+    term (the undo snapshot) should SetHandleSize it down first.
+
+    This is the pure-byte core of SyncHiddenToCanonical, split out so the
+    Writer-mode undo snapshot can grab the canonical bytes WITHOUT the expensive
+    TEDelete + TEInsert (line re-wrap) + ClearStyles round-trip through the
+    invisible gTE. gTE is only ever read after an explicit resync (save, mode
+    switch, BuildHiddenView), so it doesn't need eager rebuilding on the snapshot
+    hot path -- see CaptureSnapshot.
+*/
+Handle EmitCanonicalHandle(long *outLen)
 {
     Handle srcH;
     long len;
     Handle outH;
     long outCap;
-    long outLen;
     short monacoFont;
     short nRuns;
-    Rect savedViewRect;
     long urlSpace;
     short li;
-
-    /* Same reasoning as the watch cursor in BuildHiddenView -- this is
-       the reverse direction, called on save, mode switch, and (more
-       frequently) at the start of every typing run via PushUndoSnapshot/
-       PushRedoSnapshot, so a long, heavily-styled document can make it
-       pause noticeably mid-typing too. */
-    SetCursor(*GetCursor(watchCursor));
 
     srcH = (**gHiddenTE).hText;
     len = (**gHiddenTE).teLength;
@@ -887,10 +935,8 @@ void SyncHiddenToCanonical(void)
        (docs are <= 20 KB). */
     outCap = len * 5 + 64 + urlSpace;
     outH = NewHandle(outCap);
-    if (outH == NULL) {
-        InitCursor();
-        return;
-    }
+    if (outH == NULL)
+        return NULL;
 
     monacoFont = MonacoFont();
     SnapshotLinkTable();
@@ -898,14 +944,37 @@ void SyncHiddenToCanonical(void)
 
     HLock(srcH);
     HLock(outH);
-    outLen = MdEmit(*srcH, len, gEmitRuns, nRuns, &gEmitLinks, *outH, outCap);
+    *outLen = MdEmit(*srcH, len, gEmitRuns, nRuns, &gEmitLinks, *outH, outCap);
     HUnlock(srcH);
+    HUnlock(outH);
+    return outH;
+}
+
+void SyncHiddenToCanonical(void)
+{
+    Handle outH;
+    long outLen;
+    Rect savedViewRect;
+
+    /* Same reasoning as the watch cursor in BuildHiddenView -- this is
+       the reverse direction, called on save, mode switch, and (more
+       frequently) at the start of every typing run via PushUndoSnapshot/
+       PushRedoSnapshot, so a long, heavily-styled document can make it
+       pause noticeably mid-typing too. */
+    SetCursor(*GetCursor(watchCursor));
+
+    outH = EmitCanonicalHandle(&outLen);
+    if (outH == NULL) {
+        InitCursor();
+        return;
+    }
 
     SuppressDrawing(gTE, &savedViewRect);
 
     TESetSelect(0, 32767, gTE);
     TEDelete(gTE);
     /* Keep outH locked across TEInsert -- see BuildHiddenView. */
+    HLock(outH);
     TEInsert(*outH, outLen, gTE);
     HUnlock(outH);
     DisposeHandle(outH);
