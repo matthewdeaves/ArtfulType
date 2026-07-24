@@ -217,6 +217,10 @@ static void test_triple_run_not_paired(void)
              "===mark=== : a === run is not a highlight delimiter");
     CHECK_EQ(det("***x***", 7, '*').kind, MD_INLINE_NONE,
              "***x*** : a *** run is left to MdStrip, not auto-bolded");
+    CHECK_EQ(det("```", 3, '`').kind, MD_INLINE_NONE,
+             "``` : three backticks are a code fence, not inline code");
+    CHECK_EQ(det("a ```", 5, '`').kind, MD_INLINE_NONE,
+             "a ``` run is a fence marker, not a `code` span");
 }
 
 static void test_carriage_return_not_handled(void)

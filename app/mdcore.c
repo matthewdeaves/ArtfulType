@@ -245,12 +245,72 @@ long MdStrip(const char *src, long len, const MdStripOpts *opts,
 
     while (i < len) {
         long consumed;
+        int atLineStart = ((i == 0 && opts->startsAtLineStart) ||
+                           (i > 0 && src[i - 1] == '\r'));
+
+        /* Fenced code block: at a line start, ``` (3+ backticks) opens a block
+           whose body is LITERAL code. Like every other Writer style, the marker
+           lines are HIDDEN -- the opening and closing ``` (info string and all)
+           are dropped and only the body is emitted, styled as one Monaco CODE span
+           that INCLUDES the body's internal '\r' line breaks. That code-run-spans-
+           a-newline is exactly how the emit (SyncHiddenToCanonical) later
+           reconstructs the fence: a Monaco run containing a '\r' is a multi-line
+           block (re-fenced with ```), one without is inline `code`. No marker text
+           is kept, and nothing else can produce a multi-line code run, so the
+           round-trip needs no font-existence heuristic. Requires a matching
+           closing fence; an unclosed opener falls through to ordinary text. This is
+           the sole block feature that becomes a style run rather than a draw-time
+           overpaint (see markdown.c). */
+        if (atLineStart) {
+            long lineEnd = i;
+
+            while (lineEnd < len && src[lineEnd] != '\r')
+                lineEnd++;
+            if (MdIsCodeFence(src + i, lineEnd - i)) {
+                long bodyStart = (lineEnd < len) ? lineEnd + 1 : len;
+                long p = bodyStart;
+                long closeStart = -1;
+                long closeEnd = len;
+
+                while (p < len) {
+                    long le = p;
+
+                    while (le < len && src[le] != '\r')
+                        le++;
+                    if (MdIsCodeFence(src + p, le - p)) {
+                        closeStart = p;
+                        closeEnd = le;
+                        break;
+                    }
+                    p = (le < len) ? le + 1 : len;
+                }
+                if (closeStart >= 0) {
+                    long bodyEnd = closeStart;
+                    long outStart = outLen;
+                    long k;
+
+                    /* Drop the '\r' that ends the last body line (it precedes the
+                       closing fence), so the block body carries no trailing blank.
+                       The '\r' before the opening fence was already emitted by the
+                       previous line; both marker lines are skipped entirely. */
+                    if (bodyEnd > bodyStart && src[bodyEnd - 1] == '\r')
+                        bodyEnd--;
+                    for (k = bodyStart; k < bodyEnd; k++)
+                        out[outLen++] = src[k];
+                    if (outLen > outStart)
+                        MdRecordSpan(spans, spanCap, &nSpans, outStart, outLen,
+                                     MD_KIND_CODE, 0, 0);
+                    i = closeEnd;   /* keep the '\r' after the closing fence */
+                    continue;
+                }
+                /* Unclosed: fall through and treat the opener line as text. */
+            }
+        }
 
         /* Heading: a run of up to 3 '#' then a space, at the start of a
            line. Only when enabled, and only if src[0] is itself a line
            start (interior line starts are found via the preceding '\r'). */
-        if (opts->headingMode != MD_HEADINGS_OFF &&
-            ((i == 0 && opts->startsAtLineStart) || (i > 0 && src[i - 1] == '\r'))) {
+        if (opts->headingMode != MD_HEADINGS_OFF && atLineStart) {
             short level = 0;
 
             while (level < 3 && i + level < len && src[i + level] == '#')
@@ -335,6 +395,8 @@ short MdSpansToRuns(long textLen, const MdSpan *spans, short spanCount,
             runs[nRuns].strike = sk;
             runs[nRuns].highlight = hl;
             runs[nRuns].linkID = id;
+            runs[nRuns].heading = 0;   /* headings are line-level, applied by
+                                          MdSpansToDocRuns, not here */
             nRuns++;
         } else if (nRuns > 0) {
             /* Run table full: fold the rest into the last run so no character
@@ -503,6 +565,168 @@ long MdEmitInline(const char *src, long len,
 #undef PUT
 }
 
+/* Level of the HEADING span covering character c, or 0 if none. Headings never
+   nest inside inline styles and cover a whole line's body, so at most one covers
+   any character. */
+static short HeadingLevelAt(long c, const MdSpan *spans, short spanCount)
+{
+    short s;
+
+    for (s = 0; s < spanCount; s++)
+        if (spans[s].kind == MD_KIND_HEADING &&
+            spans[s].start <= c && c < spans[s].end)
+            return spans[s].level;
+    return 0;
+}
+
+short MdSpansToDocRuns(long textLen, const MdSpan *spans, short spanCount,
+                       MdRun *runs, short cap)
+{
+    short nRuns = 0;
+    long c;
+
+    for (c = 0; c < textLen; c++) {
+        int b = 0, it = 0, cd = 0, lk = 0, sk = 0, hl = 0;
+        short id = 0, hd, s;
+
+        for (s = 0; s < spanCount; s++) {
+            if (spans[s].start <= c && c < spans[s].end) {
+                switch (spans[s].kind) {
+                    case MD_KIND_BOLD:      b = 1; break;
+                    case MD_KIND_ITALIC:    it = 1; break;
+                    case MD_KIND_CODE:      cd = 1; break;
+                    case MD_KIND_LINK:      lk = 1; id = spans[s].linkID; break;
+                    case MD_KIND_STRIKE:    sk = 1; break;
+                    case MD_KIND_HIGHLIGHT: hl = 1; break;
+                    default: break;  /* MD_KIND_HEADING handled below */
+                }
+            }
+        }
+        hd = HeadingLevelAt(c, spans, spanCount);
+
+        /* Coalesce like MdSpansToRuns, but ALSO break on heading level so a
+           heading line is its own run(s) MdEmit can prefix -- and so a heading
+           line never merges into the surrounding plain text. */
+        if (nRuns > 0 && runs[nRuns - 1].bold == b && runs[nRuns - 1].italic == it &&
+            runs[nRuns - 1].code == cd && runs[nRuns - 1].link == lk &&
+            runs[nRuns - 1].strike == sk && runs[nRuns - 1].highlight == hl &&
+            runs[nRuns - 1].linkID == id && runs[nRuns - 1].heading == hd) {
+            runs[nRuns - 1].end = c + 1;
+        } else if (nRuns < cap) {
+            runs[nRuns].start = c;
+            runs[nRuns].end = c + 1;
+            runs[nRuns].bold = b;
+            runs[nRuns].italic = it;
+            runs[nRuns].code = cd;
+            runs[nRuns].link = lk;
+            runs[nRuns].strike = sk;
+            runs[nRuns].highlight = hl;
+            runs[nRuns].linkID = id;
+            runs[nRuns].heading = hd;
+            nRuns++;
+        } else if (nRuns > 0) {
+            runs[nRuns - 1].end = c + 1;
+        }
+    }
+
+    return nRuns;
+}
+
+/* True iff runs[r]'s text contains a '\r' -- the signal that a `code` run is a
+   multi-line fenced block rather than inline `code`. */
+static int RunHasCR(const char *stripped, const MdRun *run)
+{
+    long p;
+
+    for (p = run->start; p < run->end; p++)
+        if (stripped[p] == '\r')
+            return 1;
+    return 0;
+}
+
+long MdEmit(const char *stripped, long len,
+            MdRun *runs, short runCount,
+            const MdLinkTable *links,
+            char *out, long outCap)
+{
+    long outLen = 0;
+    long lineStart = 0;
+    short ri = 0;   /* index of the run covering lineStart */
+
+#define EPUT(ch) do { if (outLen < outCap) out[outLen++] = (char) (ch); } while (0)
+
+    /* One extra pass at lineStart == len emits nothing but lets a document that
+       ends in '\r' close out cleanly (mirrors the adapter's old loop bound). */
+    while (lineStart <= len) {
+        long lineEnd;
+
+        while (ri < runCount && runs[ri].end <= lineStart)
+            ri++;
+
+        /* Multi-line fenced code block: the run at the line start is `code` and
+           its text spans a '\r'. Re-fence its whole body verbatim. The fence body
+           begins at the line start (a fenced block always opens at one); the plain
+           '\r' that bounds the run is skipped, exactly as MdStrip dropped it. */
+        if (lineStart < len && ri < runCount && runs[ri].code &&
+            RunHasCR(stripped, &runs[ri])) {
+            long bodyEnd = runs[ri].end;
+            long p;
+
+            EPUT('`'); EPUT('`'); EPUT('`'); EPUT('\r');
+            for (p = lineStart; p < bodyEnd; p++)
+                EPUT(stripped[p]);
+            EPUT('\r'); EPUT('`'); EPUT('`'); EPUT('`');
+            if (bodyEnd < len)              /* the plain '\r' that bounded the run */
+                EPUT('\r');
+            lineStart = bodyEnd + 1;
+            continue;
+        }
+
+        lineEnd = lineStart;
+        while (lineEnd < len && stripped[lineEnd] != '\r')
+            lineEnd++;
+
+        if (lineEnd > lineStart && ri < runCount && runs[ri].heading > 0) {
+            short k;
+            long p;
+
+            for (k = 0; k < runs[ri].heading; k++)
+                EPUT('#');
+            EPUT(' ');
+            for (p = lineStart; p < lineEnd; p++)
+                EPUT(stripped[p]);
+        } else if (lineEnd > lineStart && ri < runCount) {
+            short rhi = ri;
+            long savedStart, savedEnd;
+
+            while (rhi < runCount && runs[rhi].start < lineEnd)
+                rhi++;
+            /* Emit exactly [lineStart, lineEnd) inline. Runs coalesce across '\r',
+               so the first/last run of this line may spill past the line bounds;
+               clamp them to the line for the call, then restore so the next line
+               still sees the run's real extent. Interior runs already lie wholly
+               within the line. */
+            savedStart = runs[ri].start;
+            savedEnd = runs[rhi - 1].end;
+            runs[ri].start = lineStart;
+            runs[rhi - 1].end = lineEnd;
+            outLen += MdEmitInline(stripped, lineEnd, &runs[ri],
+                                   (short) (rhi - ri), links,
+                                   out + outLen, outCap - outLen);
+            runs[ri].start = savedStart;
+            runs[rhi - 1].end = savedEnd;
+        }
+
+        if (lineEnd < len)
+            EPUT('\r');
+        lineStart = lineEnd + 1;
+    }
+
+    return outLen;
+
+#undef EPUT
+}
+
 /*
     Each of the following DetectXxx helpers owns one delimiter's live-typing
     rule. They read the buffer, and on a match fill *e with the edit plan and
@@ -652,6 +876,15 @@ static int DetectCode(const char *buf, long caret, long lineStart,
                       long lineEnd, MdInlineEdit *e)
 {
     long p, q;
+
+    /* Three or more consecutive backticks are a code FENCE (a block-level
+       feature kept literal, its body styled Monaco at rebuild time), not inline
+       `code`. Don't collapse the run -- otherwise typing ``` deletes the outer two
+       backticks and leaves the middle one as a stray inline-code span. Mirrors the
+       ~~/== 3-run rule; the just-typed backtick is at caret-1. */
+    if (caret - 3 >= lineStart &&
+        buf[caret - 2] == '`' && buf[caret - 3] == '`')
+        return 0;
 
     for (p = caret - 2; p >= lineStart; p--) {
         if (buf[p] == '`' && p + 1 < caret - 1) {
@@ -999,35 +1232,35 @@ int MdBlockquoteDepth(const char *line, long len)
     return depth;
 }
 
-/* Fenced-code delimiter: 3+ of a single '`' or '~', up to three leading spaces,
-   and (for a backtick fence) no '`' in the trailing info string. 1/0. */
+/* Fenced-code delimiter: 3+ backticks, up to three leading spaces, and no '`'
+   in the trailing info string. 1/0.
+
+   Backticks only -- the tilde fence form (~~~) that GitHub Markdown also allows
+   is deliberately NOT supported, so a run of tildes is unambiguously either
+   strikethrough (~~word~~) or literal text and can never collide with a code
+   fence. Backticks are the common, collision-free fence marker; the tilde
+   alternate is rarely used. */
 int MdIsCodeFence(const char *line, long len)
 {
     long i = 0;
     int spaces = 0, count = 0;
-    char marker;
 
     while (i < len && line[i] == ' ' && spaces < 3) {
         i++;
         spaces++;
     }
-    if (i >= len || (line[i] != '`' && line[i] != '~'))
+    if (i >= len || line[i] != '`')
         return 0;
-    marker = line[i];
-    while (i < len && line[i] == marker) {
+    while (i < len && line[i] == '`') {
         count++;
         i++;
     }
     if (count < 3)
         return 0;
-    /* The info string may not repeat the fence marker. For backticks this is
-       CommonMark ("```code`inline" is a line with inline code, not a fence); we
-       extend the same rule to tildes so that an inline "~~~word~~~" reads as
-       literal text rather than opening an (unclosed) fenced block that would
-       shade the rest of the document. A real opener is a bare run ("~~~") or a
-       run plus a marker-free info string ("~~~ruby"). */
+    /* A backtick info string may not itself contain a backtick (CommonMark):
+       "```code`inline" is a line with inline code, not a fence. */
     while (i < len) {
-        if (line[i] == marker)
+        if (line[i] == '`')
             return 0;
         i++;
     }

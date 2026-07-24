@@ -110,6 +110,11 @@ typedef struct {
     int   strike;
     int   highlight;
     short linkID;
+    short heading;   /* 1..3 when every char of this run is heading body, else 0.
+                        Line-level (never set by MdSpansToRuns, which ignores
+                        HEADING spans); carried so the whole-doc MdEmit can
+                        re-prefix a heading line with '#'. Kept LAST so older
+                        positional initialisers zero-fill it. */
 } MdRun;
 
 /*
@@ -206,6 +211,53 @@ long MdEmitInline(const char *src, long len,
                   const MdRun *runs, short runCount,
                   const MdLinkTable *links,
                   char *out, long outCap);
+
+/*
+    Whole-document reverse of MdStrip at the BLOCK level: given the Writer view's
+    stripped text and the contiguous style runs covering it (runs[0..runCount)
+    tile [0, len) in order), re-derive the canonical Markdown -- reconstructing
+    ``` fences, '#'-prefixing headings, and delegating every ordinary line to
+    MdEmitInline. This is the pure counterpart of the Mac adapter's
+    SyncHiddenToCanonical; the adapter just supplies the runs (built from
+    TextEdit) and the link table, and a host test supplies runs built by
+    MdSpansToDocRuns -- so the block-emit logic (the fence/heading/bounds code
+    that once lived untested in the adapter) is exercised off the Mac.
+
+    The run model, matching what the adapter and MdSpansToDocRuns both produce:
+      - a `code` run whose text contains a '\r' is a MULTI-LINE fenced block:
+        it is re-fenced as ```\r<body>\r```. A `code` run with no '\r' is inline
+        `code` and flows through MdEmitInline like any other run.
+      - a run with heading > 0 is a heading line: emitted as '#'*level + ' ' +
+        the run's literal text (inline styles inside a heading are not re-derived,
+        matching MdStrip, which leaves them literal).
+      - plain text coalesces freely across '\r' (so a large plain document is a
+        handful of runs, never one-run-per-line); MdEmit clamps each run to the
+        current line as it walks, so runs spanning a line break emit correctly.
+
+    Never writes past outCap (every byte goes through a bounds check, as in
+    MdEmitInline), so an over-styled or blank-line-heavy fence can't overrun the
+    heap. Returns the number of bytes written to out. MdEmit transiently clamps
+    the two boundary runs of each line and restores them before returning, so the
+    caller's run buffer is unchanged on exit (pass scratch you own). Pure: no
+    allocation, no globals, no Toolbox.
+*/
+long MdEmit(const char *stripped, long len,
+            MdRun *runs, short runCount,
+            const MdLinkTable *links,
+            char *out, long outCap);
+
+/*
+    Like MdSpansToRuns, but produces the WHOLE-DOCUMENT run list MdEmit consumes:
+    it additionally breaks runs at HEADING-span boundaries and stamps run->heading
+    with the covering heading's level. (MdSpansToRuns deliberately ignores heading
+    spans because its consumers apply headings separately; MdEmit needs them in
+    the run.) This is the pure "MdStrip output -> MdEmit input" bridge that lets a
+    host test round-trip stripped text + spans straight back to Markdown. Writes
+    up to `cap` runs, folding overflow into the last run; returns the run count.
+    Pure: no allocation, no globals, no Toolbox.
+*/
+short MdSpansToDocRuns(long textLen, const MdSpan *spans, short spanCount,
+                       MdRun *runs, short cap);
 
 /*
     The plan MdDetectInline returns: the exact edit the Mac adapter applies
@@ -313,8 +365,9 @@ int MdIsHorizontalRule(const char *line, long len);
     leading spaces before the first), or 0 if the line is not a blockquote.
 
     MdIsCodeFence reports whether line[0..len) opens or closes a fenced code block:
-    three or more '`' or '~' (a single marker char), up to three leading spaces, and
-    -- for a backtick fence -- no '`' in any trailing info string. Returns 1/0.
+    three or more backticks, up to three leading spaces, and no '`' in any trailing
+    info string. Returns 1/0. Backticks only -- the tilde fence form is deliberately
+    unsupported so a tilde run is unambiguously strikethrough (~~) or literal text.
 */
 int MdBlockquoteDepth(const char *line, long len);
 int MdIsCodeFence(const char *line, long len);

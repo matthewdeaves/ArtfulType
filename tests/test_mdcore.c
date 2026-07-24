@@ -141,6 +141,42 @@ static void test_highlight(void)
     CHECK_EQ(g_nSpans, 0, "no highlight span for a === run");
 }
 
+static void test_codeblock(void)
+{
+    /* A ``` fence hides its markers (like every other style) and emits the body
+       as one Monaco CODE span. The markers -- opening, closing, and info string --
+       are dropped; only the body remains. */
+    long n = strip("```\rcode block\r```", 0, 1);
+    CHECK_STR(g_out, n, "code block", "fence markers dropped, body kept");
+    CHECK_EQ(g_nSpans, 1, "one code span for the whole body");
+    CHECK_EQ(g_spans[0].kind, MD_KIND_CODE, "block body is code (Monaco)");
+    CHECK_EQ(g_spans[0].start, 0, "code span start");
+    CHECK_EQ(g_spans[0].end, 10, "code span covers 'code block'");
+
+    /* The body is LITERAL -- never re-parsed as inline markdown. A backtick or an
+       unmatched delimiter in the body must survive verbatim. */
+    n = strip("```\ra`b\r```", 0, 1);
+    CHECK_STR(g_out, n, "a`b", "a backtick in the body is preserved verbatim");
+    n = strip("```\r**x**\r```", 0, 1);
+    CHECK_STR(g_out, n, "**x**", "bold markers in the body stay literal code");
+
+    /* The opener's info string ("```ruby") is dropped. */
+    n = strip("```ruby\rputs 1\r```", 0, 1);
+    CHECK_STR(g_out, n, "puts 1", "opener info string is dropped");
+
+    /* A block between paragraphs drops markers, keeps the surrounding breaks. */
+    n = strip("before\r```\rcode\r```\rafter", 0, 1);
+    CHECK_STR(g_out, n, "before\rcode\rafter", "markers gone, before/after intact");
+
+    /* Multi-line body: the CODE span INCLUDES the internal '\r' -- that Monaco
+       line break is exactly what the emit uses to re-fence a multi-line block. */
+    n = strip("```\rl1\rl2\r```", 0, 1);
+    CHECK_STR(g_out, n, "l1\rl2", "multi-line code body keeps its line break");
+    CHECK_EQ(g_nSpans, 1, "one span across the whole multi-line body");
+    CHECK_EQ(g_spans[0].start, 0, "multi-line body span start");
+    CHECK_EQ(g_spans[0].end, 5, "span covers 'l1\\rl2' including the newline");
+}
+
 static void test_link(void)
 {
     long n = strip("see [text](http://x) end", 0, 1);
@@ -618,6 +654,7 @@ int main(void)
     test_bold_beats_italic();
     test_strike();
     test_highlight();
+    test_codeblock();
     test_link();
     test_link_without_table();
     test_heading();
