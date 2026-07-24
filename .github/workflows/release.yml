@@ -14,12 +14,15 @@
 #     traps (SIGILL) against the Retro68 container's older system libraries.
 #
 # Published assets:
-#   ArtfulType.bin          the application itself (MacBinary).
-#   ArtfulType-800K.dsk     bootable 800K floppy, raw HFS (System 6.0.8 + app).
-#   ArtfulType-800K.image   the same floppy in DiskCopy 4.2 format.
-#   ArtfulType-20MB.dsk     bootable 20 MB volume, for Mini vMac.
-#   HD1_ArtfulType.hda      bootable 20 MB BlueSCSI/PiSCSI device image.
-#   START_HERE.md           the getting-started guide.
+#   ArtfulType.bin              the application itself (MacBinary).
+#   ArtfulType-800K.dsk         bootable 800K floppy, raw HFS (System 6.0.8 + app).
+#   ArtfulType-800K.image       the same floppy in DiskCopy 4.2 format.
+#   ArtfulType-20MB.dsk         bootable 20 MB volume, for Mini vMac.
+#   HD1_ArtfulType.hda          bootable 20 MB BlueSCSI/PiSCSI device image.
+#   ArtfulTypeFloppyWriter.bin  tool app that writes a bootable floppy on a bare
+#                               Mac -- built here so it always embeds this
+#                               release's ArtfulType-800K.dsk (never a stale one).
+#   START_HERE.md               the getting-started guide.
 #
 # The disk images embed Apple System 6.0.8; see disk-base/README.md.
 name: Release
@@ -100,9 +103,36 @@ jobs:
           name: release-artifacts
           path: dist/
 
+  build-floppy-writer:
+    name: Build the floppy-writer tool app
+    needs: build-disks
+    runs-on: ubuntu-latest
+    # Same Retro68 container as build-app: the m68k cross-toolchain only lives
+    # here. It runs after build-disks because the writer embeds the freshly
+    # built 800K image, so the release's writer is never a build behind the app.
+    container: ghcr.io/matthewdeaves/retro68:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+      - name: Build ArtfulTypeFloppyWriter.bin (embedding this release's 800K image)
+        run: |
+          test -f dist/ArtfulType-800K.dsk
+          cmake -S tools/floppy-writer -B tools/floppy-writer/build \
+            -DCMAKE_TOOLCHAIN_FILE=/Retro68-build/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake \
+            -DAT_DISK_IMAGE="$PWD/dist/ArtfulType-800K.dsk"
+          cmake --build tools/floppy-writer/build
+          test -f tools/floppy-writer/build/ArtfulTypeFloppyWriter.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: floppy-writer
+          path: tools/floppy-writer/build/ArtfulTypeFloppyWriter.bin
+
   publish:
     name: Publish GitHub release
-    needs: build-disks
+    needs: [build-disks, build-floppy-writer]
     runs-on: ubuntu-latest
     # Only publish for real tag pushes. A workflow_dispatch run (branch ref)
     # builds and uploads the artifact but stops here -- a genuine dry run.
@@ -111,6 +141,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: release-artifacts
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: floppy-writer
           path: dist
 
       - name: Create the release
@@ -132,6 +166,7 @@ jobs:
 
             **Also attached:**
             - `ArtfulType.bin` — the application on its own (MacBinary), to add to an existing System volume (handy under Basilisk II / SheepShaver). Decode it with Stuffit Expander, or with [binUnpk](https://www.gryphel.com/c/minivmac/extras/binunpk/) — a tiny MacBinary unpacker that ships as a plain zipped disk image, so nothing needs decoding to bootstrap it.
+            - `ArtfulTypeFloppyWriter.bin` — a tool app for making a bootable ArtfulType floppy on real hardware from the launcher alone. It embeds **this release's** 800K image (built in the same run, never a stale one). Send it with `LaunchAPPL`, insert a blank 800K DD floppy, and it writes a bootable ArtfulType disk. System 6 / 800K only; see `tools/floppy-writer/README.md`.
             - `START_HERE.md` — the getting-started guide, written in ArtfulType.
 
             The disk images are formatted and blessed in software on Linux (both

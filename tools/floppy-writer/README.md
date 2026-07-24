@@ -36,7 +36,12 @@ driven blind over the network without a screen-share.
 
 ## Using it (Mac SE / System 6)
 
-1. Build it (below) and send it to the Mac with LaunchAPPL:
+Each ArtfulType release attaches a prebuilt **`ArtfulTypeFloppyWriter.bin`**
+that already embeds *that release's* 800K image, so you normally just grab it
+from the release page — no build needed. (Rebuild from source only to embed a
+different or in-development image; see [Building](#building).)
+
+1. Send it to the Mac with LaunchAPPL:
    ```
    LaunchAPPL -e tcp --tcp-address <mac-ip> ArtfulTypeFloppyWriter.bin
    ```
