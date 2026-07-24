@@ -1659,6 +1659,7 @@ static void ShadeCodeLine(TEHandle te, Point base, const FontInfo *fi,
     PenPat(gray);
     PenMode(patOr);
     PaintRect(&band);
+    PenNormal();                /* leave a clean black pen for later strokes */
 }
 
 /* Highlight (==mark==): a patOr gray band behind each highlighted run (tsColor.blue
@@ -1717,6 +1718,7 @@ static void PaintHighlightLine(TEHandle te, long ls, long le, Handle hText,
             PenMode(patOr);
             SetRect(&band, x0, yTop, (short) (x0 + w), yBot);
             PaintRect(&band);
+            PenNormal();        /* leave a clean black pen for later strokes */
         }
         c = segEnd;
     }
@@ -1731,6 +1733,7 @@ static void PaintBlockquoteBars(Point base, const FontInfo *fi, short viewLeft, 
     short yBot = base.v;
     short d, bars = (short) (depth > 4 ? 4 : depth);
 
+    LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
     ForeColor(blackColor);
     PenSize(2, 1);
     for (d = 0; d < bars; d++) {
@@ -1772,6 +1775,7 @@ static void PaintListMarker(TEHandle te, long ls, Handle hText, const MdListInfo
             side = 6;
         top = (short) (baseline - side);
         SetRect(&box, x0, top, (short) (x0 + side), baseline);
+        LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
         ForeColor(blackColor);
         PenSize(1, 1);
         PenMode(patCopy);
@@ -1791,6 +1795,7 @@ static void PaintListMarker(TEHandle te, long ls, Handle hText, const MdListInfo
         SetRect(&cell, x0, (short) (base.v - fi->ascent - fi->descent),
                 (short) (x0 + w), base.v);
         EraseRect(&cell);
+        LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
         ForeColor(blackColor);
         MoveTo(x0, baseline);
         DrawChar((short) bulletCh);
@@ -1844,9 +1849,19 @@ static void StrikeLineRuns(TEHandle te, long ls, long le, Handle hText)
         y = (short) (p.v - fi.descent - fi.ascent / 3);
         w = TextWidth(*hText, (short) c, (short) (segEnd - c));
         if (w > 0) {
+            /* Re-assert pHiliteBit immediately before the stroke (issue #9): after
+               TextEdit hilites a selection it leaves the bit CLEAR, and QuickDraw
+               then substitutes the hilite colour for the foreground on the next
+               drawing op -- so the "black" line drew in the hilite colour (white)
+               over a freshly-struck selected run. This is exactly the guard the
+               highlight/code stipple helpers use before their PaintRect; the rule
+               never needed it because a rule line is never the selected run.
+               PenNormal: a preceding stipple also leaves pnPat gray, which patCopy
+               would paint white on its own. */
+            LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
+            PenNormal();
             ForeColor(blackColor);
-            PenSize(1, 1);
-            PenMode(patCopy);
+            BackColor(whiteColor);
             MoveTo(x0, y);
             LineTo((short) (x0 + w - 1), y);
         }
@@ -1867,6 +1882,7 @@ static void PaintRule(TEHandle te, Point base, const FontInfo *fi)
     band.top = (short) (base.v - fi->ascent - fi->descent);
     EraseRect(&band);
     midY = (short) ((band.top + band.bottom) / 2);
+    LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
     PenSize(1, 1);
     ForeColor(blackColor);
     MoveTo((short) (band.left + 8), midY);
@@ -1930,6 +1946,13 @@ void DrawWriterOverlays(TEHandle te, Boolean revealActive)
     saveMode = qd.thePort->txMode;
     PenNormal();
     TextMode(srcOr);                   /* transparent, for the bullet glyph */
+    /* Re-assert the hilite bit for the whole pass. TextEdit CLEARS it when it
+       draws the active selection (that is how it inverts), and QuickDraw then
+       substitutes the hilite colour for anything drawn while it is clear -- so a
+       strike/rule/bar/marker stroked over a freshly-selected run came out in the
+       hilite colour (white), not black. The stipple helpers below set it too;
+       setting it once here also covers the pen-stroking helpers. */
+    LMSetHiliteMode((UInt8) (LMGetHiliteMode() | (1 << hiliteBit)));
     GrayStipple(&grayPat);
 
     HLock(hText);
