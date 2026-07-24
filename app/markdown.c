@@ -1999,8 +1999,12 @@ void DrawWriterOverlays(TEHandle te, Boolean revealActive)
         TextSize(st.tsSize);
         GetFontInfo(&fi);
 
-        /* Back-to-front: backgrounds, then block foreground, then strike lines. */
-        if (curInside)
+        /* Back-to-front: backgrounds, then block foreground, then strike lines.
+           Like the rule and list markers, the code-block shade reveals the
+           caret's own line so a fence marker you are still typing (a lone "~~~"
+           or "```") stays literal and editable instead of flashing shaded. */
+        if (curInside &&
+            !(revealActive && caret >= ls && caret <= le))
             ShadeCodeLine(te, base, &fi, &grayPat);
         if (hasHigh)
             PaintHighlightLine(te, ls, le, hText, &grayPat);
