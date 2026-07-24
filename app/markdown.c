@@ -1700,6 +1700,31 @@ void ClearMarkdownInSelection(void)
 }
 
 /*
+    Invalidate just the display lines the current gHiddenTE selection spans (with
+    a line of vertical padding each side), rather than the whole window. Strike
+    and highlight are pure overlays -- they set an invisible tsColor flag and
+    change no font/face/size, so no text moves, wraps, or changes height; only
+    their own lines need repainting. When the document is scrolled that is a tiny
+    fraction of InvalRect(whole port). BeginUpdate clips the DoUpdate erase +
+    TEUpdate + overlay pass to this region, so a *cleared* strike is erased
+    correctly too. The left edge reaches into the blockquote-bar margin (harmless
+    for strike/highlight); InvalRect clips the rect to the port.
+*/
+static void InvalWriterSelectionLines(void)
+{
+    Point pStart, pEnd;
+    Rect r;
+
+    pStart = TEGetPoint((**gHiddenTE).selStart, gHiddenTE);
+    pEnd = TEGetPoint((**gHiddenTE).selEnd, gHiddenTE);
+    r = (**gHiddenTE).viewRect;
+    r.left -= 30;
+    r.top = (short) (pStart.v - MAX_LINE_HEIGHT);
+    r.bottom = (short) (pEnd.v + MAX_LINE_HEIGHT);
+    InvalRect(&r);
+}
+
+/*
     Runs one Style-menu command through its whole lifecycle -- the block the
     menu dispatcher (DoMenuCommand) used to inline, moved behind this seam so
     main.c just routes to it like every other menu. Every style op dirties the
@@ -1710,9 +1735,17 @@ void ClearMarkdownInSelection(void)
     may have added or removed a strikethrough overlay the native TESetStyle
     redraw doesn't know about; in Markdown mode ClearStyles restores the plain,
     uniform look after the delimiter edit.
+
+    Strike and highlight are singled out as "overlay only": they change no text
+    metric, so the scroll range can't have moved (skip AdjustScrollbar) and only
+    the selection's own lines need repainting (skip the whole-port InvalRect).
+    That is what makes them near-instant on a real 68000 even in a long scrolled
+    document; every other style can change wrap/height and takes the full path.
 */
 void DoStyleCommand(short menuItem)
 {
+    Boolean overlayOnly = false;
+
     gDirty = true;
     PushUndoSnapshot();
     gTypingRunActive = false;
@@ -1721,8 +1754,8 @@ void DoStyleCommand(short menuItem)
             case iBold:   ToggleFace(bold); break;
             case iItalic: ToggleFace(italic); break;
             case iCode:   ToggleCode(); break;
-            case iStrike: ToggleStrike(); break;
-            case iHighlight: ToggleHighlight(); break;
+            case iStrike: ToggleStrike(); overlayOnly = true; break;
+            case iHighlight: ToggleHighlight(); overlayOnly = true; break;
             case iH1:     ToggleHeadingHidden(1); break;
             case iH2:     ToggleHeadingHidden(2); break;
             case iH3:     ToggleHeadingHidden(3); break;
@@ -1732,8 +1765,12 @@ void DoStyleCommand(short menuItem)
         /* Any of these may have added or removed a strike-through, and the
            native TESetStyle redraw doesn't know about the overpainted line.
            Repaint the content so the line is drawn (or an erased one cleared)
-           through the normal update path. */
-        InvalRect(&gWindow->portRect);
+           through the normal update path -- but only the affected lines when the
+           op was a pure overlay (see InvalWriterSelectionLines). */
+        if (overlayOnly)
+            InvalWriterSelectionLines();
+        else
+            InvalRect(&gWindow->portRect);
     } else {
         switch (menuItem) {
             case iBold:   WrapSelection("**", "**"); break;
@@ -1749,7 +1786,11 @@ void DoStyleCommand(short menuItem)
         }
         ClearStyles();
     }
-    AdjustScrollbar();
+    /* A pure-overlay toggle changes no text metric, so the scroll range is
+       unchanged and AdjustScrollbar's O(n) height recompute + overlay repaint
+       would be wasted work. Every other path can change wrap/height. */
+    if (!overlayOnly)
+        AdjustScrollbar();
 }
 
 /* =========================================================================
